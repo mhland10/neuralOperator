@@ -1,4 +1,4 @@
-** Nueral Operator **
+** Neural Operator **
 
 ## Introduction
 
