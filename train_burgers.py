@@ -24,7 +24,7 @@ initial_weights = None # 'weights/unet_1.pth'
 # Create dataloader around our dataset object #
 ###############################################
 train_dataset = burgers_dataset.Dataset()
-train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0) 
+train_loader = DataLoader(train_dataset, batch_size=10, shuffle=True, num_workers=0) 
 
 ###############################################
 # Create Unet and optimizer to solve params   #
@@ -35,7 +35,7 @@ if initial_weights is not None:
   model.load_state_dict(torch.load(initial_weights))  # load a state dictionary for the model
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-9)
 loss_fcn = torch.nn.MSELoss()
-iter_size = 10
+iter_size = 3
 
 ###############################################
 # Optimize the Unet model parameters          #

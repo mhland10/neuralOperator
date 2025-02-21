@@ -138,10 +138,12 @@ class cstam(nn.Module):
     
   def forward(self, init_state, dx, dt, N):
     # Process state
+    c = .5    # clip to prevent nanning out in early training
     state = init_state
     states = []
     for t in range(N):
-      state = state + torch.clip(self.space_model1(state, dx),-3,3) * torch.clip(self.space_model2(state, dx),-3,3) * dt # have to bound due to dx term
+      state = state + state * torch.clip(self.space_model1(state, dx),-c, c) * dt # have to bound due to dx term
+      state = state + torch.clip(self.space_model2(state, dx),-c, c) * dt         # second order term
       states.append(state)
     return torch.stack(states, dim=3)
     
