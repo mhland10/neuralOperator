@@ -1,0 +1,29 @@
+site_name: Neural Operator for CFD
+theme:
+  name: material
+  palette:
+    scheme: slate
+
+nav:
+  - Home: index.md
+  - Sphinx Docs:
+    - 'sphinx_docs/html/index.html'
+
+plugins:
+  - search
+  - mkdocs-jupyter
+  - bibtex:
+      bib_file: "docs/references.bib"
+
+
+markdown_extensions:
+  - footnotes
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences  # Supports code blocks
+
+extra_javascript:
+  - docs/mathjax.js
+
+
+
