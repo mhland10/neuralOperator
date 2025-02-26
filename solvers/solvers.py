@@ -375,6 +375,22 @@ class burgersEquation_og:
             # Solve u = A\b
             cls.u[i+1,:] = spsr.linalg.spsolve( cls.A_matrix , cls.b[i,...] )
 
+    def loss(cls, loss_norm=2.0 ):
+        """
+            This method calculates the loss function of the Burger's equation results.
+
+        Args:
+            loss_norm (float, optional):    The norm to calculate the loss function by. Defaults to
+                                                2.0.
+
+        """
+
+        ( cls.du_dt, cls.du_dx ) = np.gradient( cls.u, cls.dt, cls.dx, edge_order=2 )
+        cls.d2u_dx2 = np.gradient( cls.du_dx, cls.dx, axis=-1, edge_order=2 )
+
+        cls.losses = ( cls.du_dt - ( cls.nu*cls.d2u_dx2 - cls.u*cls.du_dx ) ) ** loss_norm
+        cls.loss_total = np.sum( cls.losses )
+
 #==================================================================================================
 #
 # Kuramoto-Sivashinsky Equation Objects

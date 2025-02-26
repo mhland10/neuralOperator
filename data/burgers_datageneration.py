@@ -110,6 +110,7 @@ for i in range( len( i_flat ) ):
     loc = (i_flat[i],j_flat[i],k_flat[i])
     hello = burgersEquation_og(x, u_0_s[loc], (0, t_end), C=C )
     hello.solve( N_spatialorder=2 )
+    hello.loss()
     burgers += [hello]
 
 #==================================================================================================
@@ -129,4 +130,6 @@ with h5.File("tanh_data.h5", "w") as f:
         group.create_dataset("c", data=cc[loc])
         group.create_dataset("snr", data=ss[loc])
         group.create_dataset("u", data=burgers[i].u)
+        group.create_dataset("losses", data=burgers[i].losses)
+        group.create_dataset("total_losses", data=burgers[i].loss_total)
 
