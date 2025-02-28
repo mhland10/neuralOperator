@@ -180,17 +180,34 @@ class eqn_problem(object):
         # BC RHS - dx
         if not BC_dx[-1]==None:
             # ie: Hold the same values at this location
-            if not BC_x[-1]=="same":
+            if not BC_dx[-1]=="same":
                 cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
                 cls.e[-1]=BC_dx[-1]
 
             for i in range( len( cls.gradient_matrices ) ):
                 cls.gradient_matrices[i][-1,:] = np.zeros_like( cls.gradient_matrices[i][-1,:] )
             
-            
-        
+        # BC LHS - dx2
+        if not BC_dx2[0]==None:
+            # ie: Hold the same values at this location
+            if not BC_dx2[0]=="same":
+                cls.E[0,:]=cls.gradient_matrices[0][0,:]
+                cls.e[0]=BC_dx2[0]
 
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][0,:] = np.zeros_like( cls.gradient_matrices[i][0,:] )
             
+        # BC RHS - dx2
+        if not BC_dx2[-1]==None:
+            # ie: Hold the same values at this location
+            if not BC_dx2[-1]=="same":
+                cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
+                cls.e[-1]=BC_dx2[-1]
+
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][-1,:] = np.zeros_like( cls.gradient_matrices[i][-1,:] )
+
+        # TODO: Add in higher order derivatives as needed     
 
         
 
