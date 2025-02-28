@@ -232,7 +232,7 @@ class burgers_eqn(eqn_problem):
         else:
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1)
 
-    def __call__(cls, x, u, nu, BC_x, BC_dx, BC_dx2, *args):
+    def __call__(cls, x, u, nu, BC_x=(None, None), BC_dx=(0, None), BC_dx2=(None, None), *args):
         """
             Set of Differential equations to solve the Burgers Equation.
 
@@ -263,6 +263,8 @@ class burgers_eqn(eqn_problem):
             BC_dx (np.ndarray):     The boundary conditions for the spatial derivative
         
         """
+
+        super().__call__(x, u, (nu), )
 
         # Set up A-matrix
         A = cls.spatialGradient_dx2.formMatrix(len(x))
