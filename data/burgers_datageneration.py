@@ -9,7 +9,7 @@
 
     This file contains the data generation objects for the Burgers equation. It will take the input
 of constants for a tanh function and some noise and generate a bunch of data to train the neural
-network on via storage in an h5 file
+network on via storage in an h5 file.
 
 """
 
@@ -43,7 +43,7 @@ from distributedFunctions import *
 C = 0.1
 
 # Set up initial spatial domain
-x = np.linspace( -1 , 1 , num=1000 )
+x = np.linspace( -1 , 1 , num=200 )
 
 # Set the end point
 t_end = 1.0

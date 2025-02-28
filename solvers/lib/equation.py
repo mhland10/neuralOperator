@@ -60,6 +60,22 @@ class eqn_problem(object):
             stepping (str, optional):   The stepping method that will be used to solve the PDE.
                                             Defaults to "explicit", or can be implicit. Not case
                                             sensitive.
+
+            max_derivative (int, optional): The maximum derivative that will be calculated in space
+                                                for the equation. Will come from the equation 
+                                                object. Default value is 4.
+
+        Attributes:
+            spatial_order <= spatial_order
+
+            spatialBC_order <= spatialBC_order
+
+            spatialGradients (numericalGradients object):   The list of numericalGradients objects
+                                                                that correspond to the i+1 spatial
+                                                                derivative.
+
+            stepping <= stepping
+            
         """
 
         # Check stencil
@@ -70,17 +86,113 @@ class eqn_problem(object):
         self.spatial_order = spatial_order
         self.spatialBC_order = spatialBC_order
 
-        # Set the spatial gradient object
-        self.spatialGradient_dx = numericalGradient(1, (self.spatial_order//2, self.spatial_order//2))
-        self.spatialGradient_dx2 = numericalGradient(2, (self.spatial_order//2, self.spatial_order//2))  
-        self.spatialGradient_dx3 = numericalGradient(3, (self.spatial_order//2, self.spatial_order//2))  
-        self.spatialGradient_dx4 = numericalGradient(4, (self.spatial_order//2, self.spatial_order//2))  
+        # Set the spatial gradient object list
+        self.spatialGradients = []
+        for i in range( max_derivative ):
+            self.spatialGradients += [numericalGradient(i+1, (self.spatial_order//2, self.spatial_order//2))]
 
         # Store stepping method
         self.stepping = stepping.lower()      
 
-    def __call__(cls, x, u, coeffs, BC_x, BC_dx, BC_dx2, BC_dx3, BC_dx4):
-        print("Hello there")
+    def __call__(cls, x, u, coeffs, BC_x=( None, None ), BC_dx=( None, None ), BC_dx2=( None, None ), BC_dx3=( None, None ), BC_dx4=( None, None ) ):
+        """
+            This method is what happens when the eqn_problem object is called by some function or 
+        such. It is set up to accept a 1D space, parameter, coefficients to the equations, and 
+        boundary conditions.
+
+            Note that the boundary conditions must correspond to the specific equation that is 
+        being used.
+
+            This method is what sets up the boundary conditions in the terms for the spatial 
+        gradients and the E<e> term which contains the 
+
+        Args:
+            x (numpy 1darray - float):  The 1D spatial domain. 
+
+            u (numpy 1darray - float):  The function as it correlates to "x".
+
+            coeffs (numpy 1darray - float): The coefficients that pertain to the spatial gradients
+                                                in the equation that is being solved. Refer to the 
+                                                specific equation. Can also be a list or tuple.
+
+            BC_x (tuple - float):   The boundary conditions for "u".
+
+            BC_dx (tuple - float):  The boundary conditions for d/dx("u").
+
+            BC_dx2 (tuple - float): The boundary conditions for d^2/dx^2("u").
+
+            BC_dx3 (tuple - float): The boundary conditions for d^3/dx^3("u").
+
+            BC_dx4 (tuple - float): The boundary conditions for d^4/dx^4("u").
+
+        """
+        
+        # Set up domain
+        cls.x = x
+        cls.u = u
+        cls.dx = np.gradient( cls.x )
+
+        # Apply mesh spacing to spatial gradients
+        cls.gradient_matrices = []
+        for i in range( len( cls.spatialGradients ) ):
+            cls.spatialGradients[i].formMatrix( len( cls.x ) )
+            # This multiplies the gradient matrix
+            cls.gradient_matrices += [ cls.spatialGradients[i].gradientMatrix.multiply( cls.dx**-(i+1) ) ]
+
+        #
+        # Set up boundary conditions
+        #
+        cls.E = spsr.csr_matrix( ([], ([], [])), shape= (len(x), len(x)) )
+        cls.e = np.zeros( len(x) )
+        for i in range( len( cls.gradient_matrices ) ):
+            cls.gradient_matrices[i] = cls.gradient_matrices[i].tocsr()
+        
+        # BC LHS - x
+        if not BC_x[0]==None:
+            # ie: Hold the same values at this location
+            if not BC_x[0]=="same":
+                cls.E[0,0]=1
+                cls.e[0]=BC_x[0]
+
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][0,:] = np.zeros_like( cls.gradient_matrices[i][0,:] )
+
+        # BC RHS - x
+        if not BC_x[-1]==None:
+            # ie: Hold the same values at this location
+            if not BC_x[-1]=="same":
+                    cls.E[-1,-1]=1
+                    cls.e[-1]=BC_x[-1]
+
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][-1,:] = np.zeros_like( cls.gradient_matrices[i][-1,:] )
+        
+        # BC LHS - dx
+        if not BC_dx[0]==None:
+            # ie: Hold the same values at this location
+            if not BC_dx[0]=="same":
+                cls.E[0,:]=cls.gradient_matrices[0][0,:]
+                cls.e[0]=BC_dx[0]
+
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][0,:] = np.zeros_like( cls.gradient_matrices[i][0,:] )
+            
+        # BC RHS - dx
+        if not BC_dx[-1]==None:
+            # ie: Hold the same values at this location
+            if not BC_x[-1]=="same":
+                cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
+                cls.e[-1]=BC_dx[-1]
+
+            for i in range( len( cls.gradient_matrices ) ):
+                cls.gradient_matrices[i][-1,:] = np.zeros_like( cls.gradient_matrices[i][-1,:] )
+            
+            
+        
+
+            
+
+        
 
 class burgers_eqn(eqn_problem):
     """
