@@ -285,24 +285,6 @@ class burgers_eqn(eqn_problem):
             A[-1,-1]= 0 
             B[-1,-1]= 0
 
-        # Set up E-matrix and e-vector as appropriate
-        E = spsr.csr_matrix((len(x), len(x)))
-        e = np.zeros(len(x))
-        if BC_x[0]:
-            E[0,0] = 1
-            e[0] = BC_x[0]
-        if BC_dx[0]:
-            E[0,0] = 1
-            E[0,1] = -1
-            e[0] = BC_dx[0]
-        if BC_x[1]:
-            E[-1,-1] = 1      
-            e[-1] = BC_x[1]
-        if BC_dx[1]:
-            E[-1,-1] = 1
-            E[-1,-2] = -1
-            e[-1] = BC_dx[1]
-
         # Sum to time derivative
         du_dt = A.dot(u) + B.dot(f) + E.dot(e)
 
