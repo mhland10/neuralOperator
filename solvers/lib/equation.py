@@ -244,7 +244,7 @@ class burgers_eqn(eqn_problem):
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1)
         self.viscid=viscid
 
-    def __call__(cls, x, u, nu, BC_x=(None, None), BC_dx=(0, None), BC_dx2=(None, None), *args):
+    def __call__(cls, x, u, nu, BCs, *args):
         """
             Set of Differential equations to solve the Burgers Equation.
 
@@ -276,15 +276,19 @@ class burgers_eqn(eqn_problem):
         
         """
 
+        # Pull the boundary conditions
+        BC_x = BCs[0]
+        BC_dx = BCs[1]
+
         # Call the parent class call method
         if cls.viscid:
-            super().__call__(x, u, (nu), BC_x=BC_x, BC_dx=BC_dx, BC_dx2=BC_dx2 )
+            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx, BC_dx2=BC_dx2 )
         else:
-            super().__call__(x, u, (nu), BC_x=BC_x, BC_dx=BC_dx )
+            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx )
 
         # Set up A-matrix - ie: 2nd derivative
-        if cls.viscid and not nu==0:
-            cls.A = nu * cls.gradient_matrices[1].todia()
+        if cls.viscid and not nu[0]==0:
+            cls.A = nu[0] * cls.gradient_matrices[1].todia()
         else:
             cls.A = 0 * cls.gradient_matrices[1].todia()
 

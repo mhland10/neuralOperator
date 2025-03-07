@@ -40,6 +40,7 @@ sys.path.append(lib_dir)
 from distributedObjects import *
 from distributedFunctions import *
 from equation import *
+from integration import *
 
 
 import numpy as np
@@ -49,7 +50,7 @@ from numba import njit, prange, jit
 
 #==================================================================================================
 #
-#
+#   New Improved 1D Solver Objects
 #
 #==================================================================================================
 
@@ -59,13 +60,15 @@ class problem1D:
     that specific problems can inherit the attributes and methods to solve specific PDE's.
 
     """
-    def __init__(self, x, u_0, t_ends, nu=0.0, dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
+    def __init__(self, x, u_0, t_ends, coeffs=[0], dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
         """
             Initialize the 1D problem. For all objects, attributes, and methods that follow, the 
         unit system must be SI or equivalent.
 
             A Note for the boundary conditions, the boundary conditions will need to be checked by 
         the individual solver that is using this object and attributes.
+
+        TODO: Add BCs for higher order derivatives
 
         Args:
             x (float):  The array of the spatial domain.
@@ -74,8 +77,8 @@ class problem1D:
 
             t_ends (float): The end points of the time domain for the problem.
 
-            nu (float, optional):   The diffusivity coefficient or viscosity for the diffusivity 
-                                        terms of the problem. Defaults to 0.0.
+            coeffs (float, optional):   The coefficients preceding the spatial gradients of the 
+                                            problem.
 
             dt (float, optional):   The time step of the problem. Defaults to None.
 
@@ -115,7 +118,7 @@ class problem1D:
         self.dt = dt
 
         # Set up the coefficients
-        self.nu = nu
+        self.coeffs = coeffs
         self.C = C
 
         # Set up the orders
@@ -141,6 +144,72 @@ class problem1D:
         
         """
         print("Solving the 1D problem.")
+
+        # Set up the integrator
+        if cls.time_integrator.lower() in ["lax", "euler"]:
+            cls.integrator = explicitEuler( cls.eqn, cls.x, cls.u_0, (cls.t_start, cls.t_end), cls.dt, cls.coeffs, cls.BCs, C=cls.C, spatial_order=cls.spatial_order, spatialBC_order=cls.spatialBC_order )
+
+        # Solve the integrator
+        cls.integrator.solve()
+
+class burgers1D(problem1D):
+    """
+        Solve the Burger's equation via an improved 1D solver that allows more flexible methods
+    
+    """
+    def __init__(self, x, u_0, t_ends, nu=0.0, dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
+        """
+            Initialize the Burger's equation.
+
+            TODO: Are there non-explicit stepping methods..?
+
+        Args:
+            x (float):  The array of the spatial domain.
+
+            u_0 (float):    The initial condition of the problem.
+
+            t_ends (float): The end points of the time domain for the problem.
+
+            nu (float, optional):   The diffusivity coefficient or viscosity for the diffusivity 
+                                        terms of the problem. Defaults to 0.0.
+
+            dt (float, optional):   The time step of the problem. Defaults to None.
+
+            C (float, optional):    The Courant number to allow the time step to become. If 
+                                        numeric, this overrides the time step if the Courant number
+                                        of the time step is too high. Defaults to None.
+
+            time_integrator (str, optional):    The time integration scheme that will be used. 
+                                                    Defaults to "lax".
+
+            spatial_order (int, optional):  The theoretical order that the spatial gradient will be
+                                                calculated by, i.e. the number of points in the 
+                                                stencil. Defaults to 2.
+
+            spatialBC_order (int, optional):    The theoretical order that the spatial gradient
+                                                    will be calculated by at the boundary 
+                                                    conditions. Defaults to None, which sets the 
+                                                    value to "spatial_order".
+
+            BC_x (_type_, optional):    The boundary conditions as a function of x. Defaults to None.
+
+            BC_dx (list, optional):     The boundary condition as a gradient of x. Defaults to 
+                                            [0,None].
+
+        """
+
+        # Initialize the parent object
+        super().__init__(x, u_0, t_ends, coeffs=[nu], dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] )
+
+        # Set up the Burger's equation
+        if nu==0:
+            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=spatialBC_order, stepping="explicit", viscid=False )
+        else:
+            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=spatialBC_order, stepping="explicit", viscid=True )
+
+
+        # Set up the boundary conditions
+        self.BCs = [ self.BC_x, self.BC_dx ]
 
 #==================================================================================================
 #
@@ -376,7 +445,7 @@ class burgersEquation_og:
             # Solve u = A\b
             cls.u[i+1,:] = spsr.linalg.spsolve( cls.A_matrix , cls.b[i,...] )
 
-    def loss(cls, loss_norm=2.0 ):
+    def loss(cls, loss_norm=2.0, engine="numpy" ):
         """
             This method calculates the loss function of the Burger's equation results.
 
@@ -384,14 +453,49 @@ class burgersEquation_og:
             loss_norm (float, optional):    The norm to calculate the loss function by. Defaults to
                                                 2.0.
 
+            engine (string, optional):  Which engine will find the losses of the solution. The 
+                                            valid options are:
+
+                                        - *"numpy","np","mkl":  Numpy
+
+                                        - "torch","pytorch":    Pytorch
+
+                                        The default is "numpy". Not case sensitive.
+
         """
 
-        ( cls.du_dt, cls.du_dx ) = np.gradient( cls.u, cls.dt, cls.dx, edge_order=2 )
-        cls.d2u_dx2 = np.gradient( cls.du_dx, cls.dx, axis=-1, edge_order=2 )
+        if engine.lower() in ["numpy", "np", "mkl"]:
+            
+            # Import numpy as our unkown engine
+            xp = np
+
+
+            ( cls.du_dt, cls.du_dx ) = xp.gradient( cls.u, cls.dt, cls.dx, edge_order=2 )
+            cls.d2u_dx2 = xp.gradient( cls.du_dx, cls.dx, axis=-1, edge_order=2 )
+
+            points = xp.prod( xp.shape( cls.losses ) )
+
+        elif engine.lower() in ["torch","pytorch"]:
+            
+            # Import pytorch and make our unkown engine
+            import torch
+            xp = torch
+
+            u = torch.tensor( cls.u , require_grad=True )
+            dt = torch.tensor( cls.dt )
+            dx = torch.tensor( cls.dx )
+
+            # Compute gradients along different dimensions
+            cls.du_dt = torch.autograd.grad(outputs=u.sum(), inputs=u, create_graph=True)[0]/dt
+            cls.du_dx = torch.autograd.grad(outputs=u.sum(dim=0), inputs=u, create_graph=True)[0]/dx
+            cls.d2u_dx2 = torch.autograd.grad(outputs=du_dx.sum(dim=0), inputs=u, create_graph=True)[0]/dx
+
+            # Compute the residual losses of the equation
+            points = torch.prod(torch.tensor(cls.du_dt.shape, dtype=torch.float32))
 
         cls.losses = ( cls.du_dt - ( cls.nu*cls.d2u_dx2 - cls.u*cls.du_dx ) ) ** loss_norm
-        cls.loss_total = np.sum( cls.losses )
-
+        cls.loss_total = xp.sum( cls.losses ) / points
+    
 #==================================================================================================
 #
 # Kuramoto-Sivashinsky Equation Objects

@@ -34,9 +34,9 @@ class explicitEuler:
             What happens when the explicit Euler object is called.
 
         Args:
-            eqn (string):   The 1D equation that will be used. The valid options are:
-
-                            - Burger's Equation
+            eqn (string):   The equation object that will be integrated via the Euler stepping
+                                method. Must be initialized by the time that the integrator accepts
+                                it.
 
             x (numpy ndarray - float):  The domain, or at least initial domain.
 
@@ -77,22 +77,10 @@ class explicitEuler:
 
 
         # Initialize the equation
-        if eqn.lower in ["burgers","burg","b","burgers equation"]:
-            if spatial_order:
-                if spatialBC_order:
-                    if coeffs[0]==0:
-                        self.equation = burgers_eqn( spatial_order=spatial_order, spatialBC_order=spatialBC_order, viscid=False )
-                    else:
-                        self.equation = burgers_eqn( spatial_order=spatial_order, spatialBC_order=spatialBC_order )
-                else:
-                    self.equation = burgers_eqn( spatial_order=spatial_order )
-            else:
-                self.equation = burgers_eqn()
-        else:
-            raise ValueError("Invalid equation selected.")
+        self.eqn = eqn
         
         # Set things
-        self.dyn_mesh = False
+        self.dyn_mesh = False #TODO: At some point, we should add a dynamic mesh
         
 
     def solve(cls):
