@@ -1,3 +1,4 @@
 *.pyc
 *.pth
+*.h5
 __pycache__
