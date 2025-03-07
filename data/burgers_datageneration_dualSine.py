@@ -43,7 +43,7 @@ from distributedFunctions import *
 C = 0.1
 
 # Set up initial spatial domain
-x = np.linspace( -1 , 1 , num=200 )
+x = np.linspace( -2*np.pi , 2*np.pi , num=200 )
 
 # Set the end point
 t_end = 1.0
@@ -52,7 +52,7 @@ t_end = 1.0
 # Parameters to vary
 #
 As = np.logspace( -2 , 0 , num=5 )
-cs = np.logspace( 0 , 2 , num=5 )
+cs = np.logspace( -2 , 0 , num=5 )
 snrs = np.logspace( -3 , -1 , num=5 )
 AA, cc, ss = np.meshgrid( As , cs, snrs )
 
@@ -68,6 +68,10 @@ k_flat = kk.flatten()
 # Initial conditions
 u_0_s = np.zeros( np.shape( AA ) + (len(x) ,) )
 
+#
+# Move to script directory
+#
+os.chdir(os.path.realpath(__file__)[:-34])
 
 
 #==================================================================================================
@@ -78,8 +82,8 @@ u_0_s = np.zeros( np.shape( AA ) + (len(x) ,) )
 
 for i in range( len( i_flat ) ):
     loc = (i_flat[i],j_flat[i],k_flat[i])
-    u_0_s[loc] = -AA[loc] * np.tanh( cc[loc] * x ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
-
+    u_0_s[loc] = -AA[loc] * ( cc[loc] * np.sin( x ) - 2 * np.sin( x/2 ) ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
+    #-AA[loc] * np.tanh( cc[loc] * x ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
 
 #==================================================================================================
 #
@@ -87,7 +91,7 @@ for i in range( len( i_flat ) ):
 #
 #==================================================================================================
 
-"""
+
 for k in k_s:
     for i in i_s:
         for j in j_s:
@@ -108,6 +112,7 @@ for k in k_s:
 burgers = []
 for i in range( len( i_flat ) ):
     loc = (i_flat[i],j_flat[i],k_flat[i])
+    print(f"Solving Burger index {i}: A={AA[loc]:.3e}, c={cc[loc]:.3e}, snr={ss[loc]:.3e}")
     hello = burgersEquation_og(x, u_0_s[loc], (0, t_end), C=C )
     hello.solve( N_spatialorder=2 )
     hello.loss()
@@ -119,7 +124,8 @@ for i in range( len( i_flat ) ):
 #
 #==================================================================================================
 
-with h5.File("tanh_data.h5", "w") as f:
+with h5.File("dualSine_data.h5", "w") as f:
+    print(f"Writing file in {os.getcwd()}")
     # Create group
     for i in range( len( i_flat ) ):
         loc = (i_flat[i],j_flat[i],k_flat[i])

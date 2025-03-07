@@ -68,7 +68,10 @@ k_flat = kk.flatten()
 # Initial conditions
 u_0_s = np.zeros( np.shape( AA ) + (len(x) ,) )
 
-
+#
+# Move to script directory
+#
+os.chdir(os.path.realpath(__file__)[:-30])
 
 #==================================================================================================
 #
