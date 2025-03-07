@@ -32,10 +32,13 @@ Version     Date            Author              Notes
 # Import Solver Libararies
 #
 import os, sys
+print(f"solvers file:\t{__file__}")
 script_dir = os.path.dirname(os.path.realpath(__file__))
 lib_dir = os.path.join(script_dir, 'lib')
+print(f"Library directory:\t{lib_dir}")
 sys.path.append(lib_dir)
 from distributedObjects import *
+from distributedFunctions import *
 
 
 import numpy as np
@@ -45,11 +48,106 @@ from numba import njit, prange, jit
 
 #==================================================================================================
 #
+#
+#
+#==================================================================================================
+
+class problem1D:
+    """
+        This object contains the necessary data and functions to solve a 1D problem. Generalized so 
+    that specific problems can inherit the attributes and methods to solve specific PDE's.
+
+    """
+    def __init__(self, x, u_0, t_ends, nu=0.0, dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
+        """
+            Initialize the 1D problem. For all objects, attributes, and methods that follow, the 
+        unit system must be SI or equivalent.
+
+            A Note for the boundary conditions, the boundary conditions will need to be checked by 
+        the individual solver that is using this object and attributes.
+
+        Args:
+            x (float):  The array of the spatial domain.
+
+            u_0 (float):    The initial condition of the problem.
+
+            t_ends (float): The end points of the time domain for the problem.
+
+            nu (float, optional):   The diffusivity coefficient or viscosity for the diffusivity 
+                                        terms of the problem. Defaults to 0.0.
+
+            dt (float, optional):   The time step of the problem. Defaults to None.
+
+            C (float, optional):    The Courant number to allow the time step to become. If 
+                                        numeric, this overrides the time step if the Courant number
+                                        of the time step is too high. Defaults to None.
+
+            time_integrator (str, optional):    The time integration scheme that will be used. 
+                                                    Defaults to "lax".
+
+            spatial_order (int, optional):  The theoretical order that the spatial gradient will be
+                                                calculated by, i.e. the number of points in the 
+                                                stencil. Defaults to 2.
+
+            spatialBC_order (int, optional):    The theoretical order that the spatial gradient
+                                                    will be calculated by at the boundary 
+                                                    conditions. Defaults to None, which sets the 
+                                                    value to "spatial_order".
+
+            BC_x (_type_, optional):    The boundary conditions as a function of x. Defaults to None.
+
+            BC_dx (list, optional):     The boundary condition as a gradient of x. Defaults to 
+                                            [0,None].
+
+        Raises:
+            
+        """
+
+        # Set up the spatial domain
+        self.x = x
+        self.Nx = len( x )
+        self.u_0 = u_0
+
+        # Set up the time domain
+        self.t_start = t_ends[0]
+        self.t_end = t_ends[-1]
+        self.dt = dt
+
+        # Set up the coefficients
+        self.nu = nu
+        self.C = C
+
+        # Set up the orders
+        self.spatial_order = spatial_order
+        if spatial_order:
+            self.spatialBC_order = spatialBC_order
+        else:
+            self.spatialBC_order = spatial_order
+        
+        # Set up the boundary conditions
+        self.BC_x = BC_x
+        self.BC_dx = BC_dx
+
+        # Set up the time integrator
+        self.time_integrator = time_integrator
+
+    def solve( cls ):
+        """
+            Solve the 1D problem.
+
+        Args:
+            None
+        
+        """
+        print("Solving the 1D problem.")
+
+#==================================================================================================
+#
 # Burgers Equation Objects
 #
 #==================================================================================================
 
-class burgersEquation:
+class burgersEquation_og:
     """
     This object allows a user to solve a Burger's equation. See HW3 for more detail.
 
@@ -277,13 +375,29 @@ class burgersEquation:
             # Solve u = A\b
             cls.u[i+1,:] = spsr.linalg.spsolve( cls.A_matrix , cls.b[i,...] )
 
+    def loss(cls, loss_norm=2.0 ):
+        """
+            This method calculates the loss function of the Burger's equation results.
+
+        Args:
+            loss_norm (float, optional):    The norm to calculate the loss function by. Defaults to
+                                                2.0.
+
+        """
+
+        ( cls.du_dt, cls.du_dx ) = np.gradient( cls.u, cls.dt, cls.dx, edge_order=2 )
+        cls.d2u_dx2 = np.gradient( cls.du_dx, cls.dx, axis=-1, edge_order=2 )
+
+        cls.losses = ( cls.du_dt - ( cls.nu*cls.d2u_dx2 - cls.u*cls.du_dx ) ) ** loss_norm
+        cls.loss_total = np.sum( cls.losses )
+
 #==================================================================================================
 #
 # Kuramoto-Sivashinsky Equation Objects
 #
 #==================================================================================================
 
-class KS:
+class KS_og:
     """
     This object contains the necessary data and functions to solve the
         Kuramoto-Sivashinsky equations

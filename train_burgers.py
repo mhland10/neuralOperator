@@ -18,7 +18,7 @@ from unet_1d import cstam
 retrain = True
 reevaluate = True
 use_cuda = torch.cuda.is_available()
-initial_weights = None # 'weights/unet_1.pth'
+initial_weights = 'weights/unet_5.pth'
 
 ###############################################
 # Create dataloader around our dataset object #
@@ -44,7 +44,7 @@ if retrain:
   losses = []
   residuals = []
   # Loop over the dataset
-  for epoch in range(5):
+  for epoch in range(15):
     for i, data in enumerate(train_loader, 0):
       u0, U = data             # b, p are batch x t x c x l
       if use_cuda: u0, U = u0.cuda(), U.cuda()

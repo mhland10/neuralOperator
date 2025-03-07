@@ -18,7 +18,7 @@ Version     Date            Author              Notes
 
 #==================================================================================================
 #
-# Importing Required Modules
+#   Importing Required Modules
 #
 #==================================================================================================
 
@@ -26,6 +26,11 @@ import numpy as np
 import scipy.special as spsp
 import scipy.sparse as spsr
 from numba import njit, prange, jit
+
+print("Before import from distributedFunctions")
+from distributedFunctions import factorial_numba
+print("After import from distributedFunctions")
+from distributedFunctions import *
 
 #==================================================================================================
 #
@@ -60,7 +65,6 @@ class numericalGradient:
                                 template that was put in the object.
 
         """
-
         factorial_numba(1)
 
         if len( template ) > 2:

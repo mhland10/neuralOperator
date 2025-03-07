@@ -83,7 +83,8 @@ class Dataset(torch.utils.data.Dataset):
      # Pick an initial condition
      cx = np.random.uniform(2,10-2)
      var = np.random.uniform(.25,3) # original is 2
-     u0 = np.exp(-(self.X-cx)**2/var)
+     scaling = np.random.uniform(0.5,1.0)
+     u0 = np.exp(-(self.X-cx)**2/var) * scaling
      
      # Solve over all time
      U = odeint(burg_system, u0, self.T, args=(self.k, self.mu, self.nu,), mxstep=5000).T
