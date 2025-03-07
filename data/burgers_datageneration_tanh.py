@@ -68,6 +68,9 @@ k_flat = kk.flatten()
 # Initial conditions
 u_0_s = np.zeros( np.shape( AA ) + (len(x) ,) )
 
+# Spatial order for solution
+space_order = 2
+
 #
 # Move to script directory
 #
@@ -79,8 +82,11 @@ os.chdir(os.path.realpath(__file__)[:-30])
 #
 #==================================================================================================
 
+# Here, we sweep through the various parameters to create a set of initial conditions
 for i in range( len( i_flat ) ):
+    # Define the matrix location for the meshgrid from the flatten indices
     loc = (i_flat[i],j_flat[i],k_flat[i])
+    # Establish the initial conditions via the u(0, x)=-A tanh(c x) * (1+noise)
     u_0_s[loc] = -AA[loc] * np.tanh( cc[loc] * x ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
 
 
@@ -90,6 +96,8 @@ for i in range( len( i_flat ) ):
 #
 #==================================================================================================
 
+# Here, we can plot the initial conditions via the SNR to see what we are producing, or one can 
+#   comment them out
 """
 for k in k_s:
     for i in i_s:
@@ -108,11 +116,17 @@ for k in k_s:
 #
 #==================================================================================================
 
+# Perform the burgers equation functions
 burgers = []
 for i in range( len( i_flat ) ):
+    # Define our location in the sweep
     loc = (i_flat[i],j_flat[i],k_flat[i])
+    # Initialize the burgers equation object - in this one we will use the original Burger's 
+    #   equation that came out of the CFD class
     hello = burgersEquation_og(x, u_0_s[loc], (0, t_end), C=C )
-    hello.solve( N_spatialorder=2 )
+    # Solve the Burger's equation via a spatial order of 2, this can be changed
+    hello.solve( N_spatialorder=space_order )
+    # Calculate the loss to see the error from our Burger's equation solve
     hello.loss()
     burgers += [hello]
 
@@ -122,6 +136,8 @@ for i in range( len( i_flat ) ):
 #
 #==================================================================================================
 
+# Write all our data by case to a *.h5 file
+# I split the defining data for the dataset into attributes for easier access
 with h5.File("tanh_data.h5", "w") as f:
     # Create group
     for i in range( len( i_flat ) ):
@@ -129,10 +145,10 @@ with h5.File("tanh_data.h5", "w") as f:
         group = f.create_group(f"dataset-{i}")
 
         group.create_dataset("u_0", data=u_0_s[loc])
-        group.create_dataset("A", data=AA[loc])
-        group.create_dataset("c", data=cc[loc])
-        group.create_dataset("snr", data=ss[loc])
+        group.attrs["A"]=AA[loc]
+        group.attrs["c"]=cc[loc]
+        group.attrs["snr"]=ss[loc]
         group.create_dataset("u", data=burgers[i].u)
         group.create_dataset("losses", data=burgers[i].losses)
-        group.create_dataset("total_losses", data=burgers[i].loss_total)
+        group.attrs["total_losses"]=burgers[i].loss_total
 
