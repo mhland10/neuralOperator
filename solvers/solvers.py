@@ -39,6 +39,7 @@ print(f"Library directory:\t{lib_dir}")
 sys.path.append(lib_dir)
 from distributedObjects import *
 from distributedFunctions import *
+from equation import *
 
 
 import numpy as np

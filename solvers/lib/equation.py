@@ -142,6 +142,7 @@ class eqn_problem(object):
         #
         # Set up boundary conditions
         #
+        bc_count = 0
         cls.E = spsr.csr_matrix( ([], ([], [])), shape= (len(x), len(x)) )
         cls.e = np.zeros( len(x) )
         for i in range( len( cls.gradient_matrices ) ):
@@ -149,6 +150,7 @@ class eqn_problem(object):
         
         # BC LHS - x
         if not BC_x[0]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_x[0]=="same":
                 cls.E[0,0]=1
@@ -159,6 +161,7 @@ class eqn_problem(object):
 
         # BC RHS - x
         if not BC_x[-1]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_x[-1]=="same":
                     cls.E[-1,-1]=1
@@ -169,6 +172,7 @@ class eqn_problem(object):
         
         # BC LHS - dx
         if not BC_dx[0]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_dx[0]=="same":
                 cls.E[0,:]=cls.gradient_matrices[0][0,:]
@@ -179,6 +183,7 @@ class eqn_problem(object):
             
         # BC RHS - dx
         if not BC_dx[-1]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_dx[-1]=="same":
                 cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
@@ -189,6 +194,7 @@ class eqn_problem(object):
             
         # BC LHS - dx2
         if not BC_dx2[0]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_dx2[0]=="same":
                 cls.E[0,:]=cls.gradient_matrices[0][0,:]
@@ -199,6 +205,7 @@ class eqn_problem(object):
             
         # BC RHS - dx2
         if not BC_dx2[-1]==None:
+            bc_count+=1
             # ie: Hold the same values at this location
             if not BC_dx2[-1]=="same":
                 cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
@@ -207,7 +214,10 @@ class eqn_problem(object):
             for i in range( len( cls.gradient_matrices ) ):
                 cls.gradient_matrices[i][-1,:] = np.zeros_like( cls.gradient_matrices[i][-1,:] )
 
-        # TODO: Add in higher order derivatives as needed     
+        # TODO: Add in higher order derivatives as needed   
+
+        cls.bc_count = bc_count 
+        cls.E = cls.E.todia() 
 
         
 
@@ -225,12 +235,14 @@ class burgers_eqn(eqn_problem):
         # Set up boundary condition order
         if spatialBC_order is None:
             spatialBC_order = spatial_order
+        print(f"Spatial order is {spatial_order}")
 
         # Initialize from eqn_problem
         if viscid:
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=2)
         else:
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1)
+        self.viscid=viscid
 
     def __call__(cls, x, u, nu, BC_x=(None, None), BC_dx=(0, None), BC_dx2=(None, None), *args):
         """
@@ -264,31 +276,26 @@ class burgers_eqn(eqn_problem):
         
         """
 
-        super().__call__(x, u, (nu), )
+        # Call the parent class call method
+        if cls.viscid:
+            super().__call__(x, u, (nu), BC_x=BC_x, BC_dx=BC_dx, BC_dx2=BC_dx2 )
+        else:
+            super().__call__(x, u, (nu), BC_x=BC_x, BC_dx=BC_dx )
 
-        # Set up A-matrix
-        A = cls.spatialGradient_dx2.formMatrix(len(x))
+        # Set up A-matrix - ie: 2nd derivative
+        if cls.viscid and not nu==0:
+            cls.A = nu * cls.gradient_matrices[1].todia()
+        else:
+            cls.A = 0 * cls.gradient_matrices[1].todia()
 
         # Set up B-matrix
-        B = cls.spatialGradient_dx.formMatrix(len(x))
-        f = u*u/2
-
-        #
-        # Set up BCs
-        #
-
-        # Set A & B matrix entries to zero as appropriate
-        A = A.tocsr()
-        B = B.tocsr()
-        if BC_x[0] or BC_dx[0]:
-            A[0,0]= 0
-            B[0,0]= 0
-        if BC_x[1] or BC_dx[1]:
-            A[-1,-1]= 0 
-            B[-1,-1]= 0
+        cls.B = cls.gradient_matrices[0].todia()
+        cls.f = u*u/2
 
         # Sum to time derivative
-        du_dt = A.dot(u) + B.dot(f) + E.dot(e)
+        du_dt = cls.A.dot(u) + cls.B.dot(cls.f) + cls.E.dot(cls.e)
+
+        return du_dt
 
 
 
