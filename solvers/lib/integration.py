@@ -29,7 +29,7 @@ class explicitEuler:
     May also be called Lax method.
 
     """
-    def __init__(self, eqn, x, u_0, t_domain, dt, coeffs, BCs, C=None, spatial_order=None, spatialBC_order=None ):
+    def __init__(self, eqn, x, u_0, t_domain, dt, coeffs, BCs, C=None, spatial_order=None, spatialBC_order=None, initialized=True ):
         """
             What happens when the explicit Euler object is called.
 
@@ -74,6 +74,7 @@ class explicitEuler:
         self.x = [self.x_0]
         self.dx=[]
         self.dt = [dt]
+        self.coeffs = coeffs
 
 
         # Initialize the equation
@@ -83,24 +84,46 @@ class explicitEuler:
         self.dyn_mesh = False #TODO: At some point, we should add a dynamic mesh
         
 
-    def solve(cls):
+    def solve(cls, time_deriv_store=True ):
         """
             Solve the Euler stepping 
 
         """
 
+        # Initialize the time derivative storage
+        if time_deriv_store:
+            cls.time_deriv = []
+
         while cls.t[-1]<=cls.t_end:
+            print(f"Time: {cls.t[-1]}")
 
             # Define the domain
             if cls.dyn_mesh:
                 cls.dx+=[np.gradient(cls.x[0])]
                 dx_step = cls.dx[0]
+            x_domain = cls.x[-1]
 
-            # 
+            # Find the time derivative
+            du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
 
+            # Perform the integration
+            cls.u += [cls.u[-1] + cls.dt[-1]*du_dt]
+
+            # Check the Courant number
+            Cos = np.abs(cls.u[-1])*cls.dt[-1]/np.gradient(x_domain)
+            print(f"\tMaximum Courant Number: {np.max(Cos)}")
             if cls.C:
                 print("Checking Courant Number")
 
             cls.t += [cls.dt[-1]+cls.t[-1]]
+
+        #
+        # Reset to numpy arrays
+        #
+        cls.t = np.array(cls.t)
+        try:
+            cls.u = np.array(cls.u)
+        except:
+            raise Warning("Could not convert u to numpy array")
 
 

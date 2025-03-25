@@ -244,7 +244,7 @@ class burgers_eqn(eqn_problem):
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1)
         self.viscid=viscid
 
-    def __call__(cls, x, u, nu, BCs, *args):
+    def __call__(cls, x, u, coeffs, BCs, *args):
         """
             Set of Differential equations to solve the Burgers Equation.
 
@@ -276,6 +276,8 @@ class burgers_eqn(eqn_problem):
         
         """
 
+        nu=coeffs[0]
+
         # Pull the boundary conditions
         BC_x = BCs[0]
         BC_dx = BCs[1]
@@ -288,16 +290,16 @@ class burgers_eqn(eqn_problem):
 
         # Set up A-matrix - ie: 2nd derivative
         if cls.viscid and not nu[0]==0:
-            cls.A = nu[0] * cls.gradient_matrices[1].todia()
-        else:
-            cls.A = 0 * cls.gradient_matrices[1].todia()
+            cls.A = nu[0] * cls.gradient_matrices
 
         # Set up B-matrix
         cls.B = cls.gradient_matrices[0].todia()
         cls.f = u*u/2
 
         # Sum to time derivative
-        du_dt = cls.A.dot(u) + cls.B.dot(cls.f) + cls.E.dot(cls.e)
+        du_dt = -cls.B.dot(cls.f) + cls.E.dot(cls.e)
+        if cls.viscid and not nu[0]==0:
+            du_dt += -cls.A.dot(u)
 
         return du_dt
 
