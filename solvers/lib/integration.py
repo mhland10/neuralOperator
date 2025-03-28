@@ -94,7 +94,15 @@ class explicitEuler:
         if time_deriv_store:
             cls.time_deriv = []
 
-        while cls.t[-1]<=cls.t_end:
+        # Define the time steps to use
+        t_s = list(np.arange(cls.t_start, cls.t_end, cls.dt[-1]))
+        if cls.t_end not in t_s:
+            t_s += [cls.t_end]
+        t_s = np.array(t_s)
+        cls.t_s = t_s
+
+        # Loop over the time steps
+        for i, t in enumerate(t_s):
             print(f"Time: {cls.t[-1]}")
 
             # Define the domain
@@ -103,17 +111,26 @@ class explicitEuler:
                 dx_step = cls.dx[0]
             x_domain = cls.x[-1]
 
+            # Check the Courant number
+            Cos = np.abs(cls.u[-1])*cls.dt[-1]/np.gradient(x_domain)
+            print(f"\tMaximum Courant Number: {np.max(Cos)}")
+            if cls.C:
+                print("Checking Courant Number")
+            else:
+                if np.max(Cos)>1.0:
+                    print("No Courant Number Check, defaulting to Co=1.0")
+                    dt_reduced = 1/np.max( np.abs(cls.u[-1])/np.gradient(x_domain) )
+                    print(f"The reduced dt is: {dt_reduced:.2e} from {cls.dt[-1]:.2e}")
+                    t_s_new = np.arange(cls.t[-1]+dt_reduced, cls.t[-1]+cls.dt[-1], dt_reduced)
+                    print(f"New time steps are: {t_s_new}")
+
             # Find the time derivative
             du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
 
             # Perform the integration
             cls.u += [cls.u[-1] + cls.dt[-1]*du_dt]
 
-            # Check the Courant number
-            Cos = np.abs(cls.u[-1])*cls.dt[-1]/np.gradient(x_domain)
-            print(f"\tMaximum Courant Number: {np.max(Cos)}")
-            if cls.C:
-                print("Checking Courant Number")
+            
 
             cls.t += [cls.dt[-1]+cls.t[-1]]
 

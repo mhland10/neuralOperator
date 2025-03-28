@@ -51,10 +51,11 @@ t_end = 1.0
 #
 # Parameters to vary
 #
-As = np.logspace( -2 , 0 , num=5 )
-cs = np.logspace( 0 , 2 , num=5 )
-snrs = np.logspace( -3 , -1 , num=5 )
-AA, cc, ss = np.meshgrid( As , cs, snrs )
+As = np.logspace( -2 , 0 , num=4 )
+cs = np.logspace( 0 , 2 , num=3 )
+snrs = np.logspace( -3 , -1 , num=2 )
+cc, AA, ss = np.meshgrid( cs , As, snrs )
+print(f"Meshgrid shape:\t{np.shape(AA)}")
 
 # Indices to go along with parameters
 i_s = np.arange( 0, len(As) )
@@ -98,7 +99,7 @@ for i in range( len( i_flat ) ):
 
 # Here, we can plot the initial conditions via the SNR to see what we are producing, or one can 
 #   comment them out
-"""
+
 for k in k_s:
     for i in i_s:
         for j in j_s:
@@ -127,6 +128,7 @@ for i in range( len( i_flat ) ):
     # Solve the Burger's equation via a spatial order of 2, this can be changed
     hello.solve( N_spatialorder=space_order )
     # Calculate the loss to see the error from our Burger's equation solve
+    print(f"Burgers equation has {dir(hello)}")
     hello.loss()
     burgers += [hello]
 
@@ -152,3 +154,23 @@ with h5.File("tanh_data.h5", "w") as f:
         group.create_dataset("losses", data=burgers[i].losses)
         group.attrs["total_losses"]=burgers[i].loss_total
 
+#==================================================================================================
+#
+#   Plot the data
+#
+#==================================================================================================   
+
+# Plot the data to see what we are producing, or one can
+#   comment them out
+
+for i in range( len( i_flat ) ):
+    b = burgers[i]
+
+
+    plt.contourf( b.x, b.t, b.u )
+    plt.xlabel("x Position [m]")
+    plt.ylabel("Time [s]")
+    plt.title("Burgers Equation Solution")
+    plt.colorbar(label="u [m/s]")
+    plt.show()
+#"""

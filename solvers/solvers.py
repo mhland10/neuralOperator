@@ -472,7 +472,7 @@ class burgersEquation_og:
             ( cls.du_dt, cls.du_dx ) = xp.gradient( cls.u, cls.dt, cls.dx, edge_order=2 )
             cls.d2u_dx2 = xp.gradient( cls.du_dx, cls.dx, axis=-1, edge_order=2 )
 
-            points = xp.prod( xp.shape( cls.losses ) )
+            points = xp.prod( xp.shape( cls.du_dt ) )
 
         elif engine.lower() in ["torch","pytorch"]:
             

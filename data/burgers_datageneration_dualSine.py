@@ -54,7 +54,8 @@ t_end = 1.0
 As = np.logspace( -2 , 0 , num=5 )
 cs = np.logspace( -2 , 0 , num=5 )
 snrs = np.logspace( -3 , -1 , num=5 )
-AA, cc, ss = np.meshgrid( As , cs, snrs )
+cc, AA, ss = np.meshgrid( cs , As, snrs )
+print(f"Meshgrid shape:\t{np.shape(AA)}")
 
 # Indices to go along with parameters
 i_s = np.arange( 0, len(As) )
@@ -69,7 +70,7 @@ k_flat = kk.flatten()
 u_0_s = np.zeros( np.shape( AA ) + (len(x) ,) )
 
 # Spatial order for solution
-space_order = 2
+space_order = 4
 
 #
 # Move to script directory
@@ -87,8 +88,9 @@ os.chdir(os.path.realpath(__file__)[:-34])
 for i in range( len( i_flat ) ):
     # Define the matrix location for the meshgrid from the flatten indices
     loc = (i_flat[i],j_flat[i],k_flat[i])
+    print(f"Location:\t{loc}")
     # Establish the initial conditions via the u(0, x)=-A * ( c sin(x) - 2 sin(x/2) ) * (1+noise)
-    u_0_s[loc] = -AA[loc] * ( cc[loc] * np.sin( x ) - 2 * np.sin( x/2 ) ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
+    u_0_s[loc] = AA[loc] * ( cc[loc] * np.sin( x ) - 2 * np.sin( x/2 ) ) * ( 1 + ss[loc] * np.random.rand( len(x) )/2 - ss[loc] * np.random.rand( len(x) )/2 )
 
 
 #==================================================================================================
@@ -99,7 +101,7 @@ for i in range( len( i_flat ) ):
 
 # Here, we can plot the initial conditions via the SNR to see what we are producing, or one can 
 #   comment them out
-"""
+
 for k in k_s:
     for i in i_s:
         for j in j_s:
@@ -154,4 +156,25 @@ with h5.File("dualSine_data.h5", "w") as f:
         group.create_dataset("u", data=burgers[i].u)
         group.create_dataset("losses", data=burgers[i].losses)
         group.attrs["total_losses"]=burgers[i].loss_total
+
+#==================================================================================================
+#
+#   Plot the data
+#
+#==================================================================================================   
+
+# Plot the data to see what we are producing, or one can
+#   comment them out
+
+for i in range( len( i_flat ) ):
+    b = burgers[i]
+
+
+    plt.contourf( b.x, b.t, b.u )
+    plt.xlabel("x Position [m]")
+    plt.ylabel("Time [s]")
+    plt.title("Burgers Equation Solution")
+    plt.colorbar(label="u [m/s]")
+    plt.show()
+#***
 
