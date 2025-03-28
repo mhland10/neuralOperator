@@ -116,23 +116,16 @@ class explicitEuler:
             print(f"\tMaximum Courant Number: {np.max(Cos)}")
             if cls.C:
                 print("Checking Courant Number")
+                if np.max(Cos)>cls.C:
+                    cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
+                else:
+                    cls.timeStep(x_domain)
+                
             else:
                 if np.max(Cos)>1.0:
-                    print("No Courant Number Check, defaulting to Co=1.0")
-                    dt_reduced = 1/np.max( np.abs(cls.u[-1])/np.gradient(x_domain) )
-                    print(f"The reduced dt is: {dt_reduced:.2e} from {cls.dt[-1]:.2e}")
-                    t_s_new = np.arange(cls.t[-1]+dt_reduced, cls.t[-1]+cls.dt[-1], dt_reduced)
-                    print(f"New time steps are: {t_s_new}")
-
-            # Find the time derivative
-            du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
-
-            # Perform the integration
-            cls.u += [cls.u[-1] + cls.dt[-1]*du_dt]
-
-            
-
-            cls.t += [cls.dt[-1]+cls.t[-1]]
+                    cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
+                else:
+                    cls.timeStep(x_domain)
 
         #
         # Reset to numpy arrays
@@ -142,5 +135,70 @@ class explicitEuler:
             cls.u = np.array(cls.u)
         except:
             raise Warning("Could not convert u to numpy array")
+        
+    def timeStep(cls, x_domain):
+        """
+            This method performs the actual time stepping.
+
+        Args:
+            x_domain (numpy ndarray - float): The domain of the problem.
+
+        """
+
+        # Find the time derivative
+        du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
+
+        # Perform the integration
+        cls.u += [cls.u[-1] + cls.dt[-1]*du_dt]
+
+        # Add time steps
+        cls.t += [cls.dt[-1]+cls.t[-1]]
+        
+
+    def adaptiveTimeStepping(cls, x_domain, dt ):
+        """
+            In this method, the object will perform the adaptive time stepping to hold the Courant
+        Number under the specified value. This is done by checking the Courant number and then
+        calculating the new time step size based on the maximum Courant number and current velocity
+        and x-domain.
+
+        Args:
+"
+            x_domain (numpy ndarray - float): The domain of the problem.
+
+            dt (float): The original time step size.
+
+        """
+        print("**Using adaptive Time Stepping**")
+
+        # Get the maximum allowable time step
+        dt_new = cls.C / np.max(np.abs(cls.u[-1])/np.gradient(x_domain))
+        print(f"New time step: {dt_new}")
+
+        # Set a new array of time steps
+        t_s_new = list( cls.t[-1] + np.arange( 0, dt, dt_new) ) + [cls.t[-1]+dt]
+        t_s_new = np.array(t_s_new)
+        print(f"New time steps: {t_s_new}")
+
+        # Solver over the new time steps
+        for i, tt in enumerate(t_s_new):
+            print(f"Time: {tt}")
+            # Find the time derivative
+            du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
+
+            # Perform the integration
+            dt_step = tt - cls.t[-1]
+            print(f"t_step: {dt_step}")
+            cls.u += [cls.u[-1] + dt_step*du_dt]
+
+            # Create a new Courant number
+            Cos_new = np.abs(cls.u[-1])*dt_step/np.gradient(x_domain)
+            print(f"Maximum velocity:\t{np.max(np.abs(cls.u[-1]))}")
+            print(f"Minimum step size:\t{np.min(np.gradient(x_domain))}")
+            print(f"New Maximum Courant Number: {np.max(Cos_new)}")
+
+            # Add time steps
+            cls.t += [dt_step+cls.t[-1]]
+
 
 
