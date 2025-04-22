@@ -29,7 +29,7 @@ class explicitEuler:
     May also be called Lax method.
 
     """
-    def __init__(self, eqn, x, u_0, t_domain, dt, coeffs, BCs, C=None, spatial_order=None, spatialBC_order=None, initialized=True ):
+    def __init__(self, eqn, x, u_0, t_domain, dt, coeffs, BCs, C=None, spatial_order=None, spatialBC_order=None, initialized=True, space_dependent=True ):
         """
             What happens when the explicit Euler object is called.
 
@@ -82,9 +82,10 @@ class explicitEuler:
         
         # Set things
         self.dyn_mesh = False #TODO: At some point, we should add a dynamic mesh
+        self.space_dependent = space_dependent
         
 
-    def solve(cls, time_deriv_store=True ):
+    def solve(cls, time_deriv_store=True, ignore_C=False ):
         """
             Solve the Euler stepping 
 
@@ -112,20 +113,23 @@ class explicitEuler:
             x_domain = cls.x[-1]
 
             # Check the Courant number
-            Cos = np.abs(cls.u[-1])*cls.dt[-1]/np.gradient(x_domain)
-            print(f"\tMaximum Courant Number: {np.max(Cos)}")
-            if cls.C:
-                print("Checking Courant Number")
-                if np.max(Cos)>cls.C:
-                    cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
-                else:
-                    cls.timeStep(x_domain)
-                
+            if ignore_C:
+                cls.timeStep(x_domain)
             else:
-                if np.max(Cos)>1.0:
-                    cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
+                Cos = np.abs(cls.u[-1])*cls.dt[-1]/np.gradient(x_domain)
+                print(f"\tMaximum Courant Number: {np.max(Cos)}")
+                if cls.C:
+                    print("Checking Courant Number")
+                    if np.max(Cos)>cls.C:
+                        cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
+                    else:
+                        cls.timeStep(x_domain)
+                    
                 else:
-                    cls.timeStep(x_domain)
+                    if np.max(Cos)>1.0:
+                        cls.adaptiveTimeStepping(x_domain, cls.dt[-1])
+                    else:
+                        cls.timeStep(x_domain)
 
         #
         # Reset to numpy arrays
@@ -146,7 +150,10 @@ class explicitEuler:
         """
 
         # Find the time derivative
-        du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
+        if cls.space_dependent:
+            du_dt = cls.eqn( x_domain, cls.u[-1], cls.coeffs, cls.BCs )
+        else:
+            du_dt = cls.eqn( cls.u[-1], cls.coeffs )
 
         # Perform the integration
         cls.u += [cls.u[-1] + cls.dt[-1]*du_dt]

@@ -302,6 +302,74 @@ class burgers_eqn(eqn_problem):
             du_dt += -cls.A.dot(u)
 
         return du_dt
+    
+class stewartLandau_eqn(eqn_problem):
+    """
+        This is the object that allows us to find the solution of the Stewart-Landau equation. This
+    was specifically developed for MAT-5323 at the University of Texas at San Antonio, Assignment
+    3.
+
+        This takes the equations:
+
+    $$
+    \frac{dr}{dt} = \mu r(t) - r^3 (t) 
+    $$
+    $$
+    \frac{d\theta}{dt} = \gamma - \beta r^2 (t) 
+    $$
+
+        In this case, $t$ is the parameter or time. 
+
+    """
+
+    def __init__(self, stepping="explicit", SNR=0.0 ):
+        """
+            Initialize the Stewart-Landau Equation problem.
+        
+        """
+
+        # Initialize from eqn_problem
+        super().__init__(2, 2, stepping=stepping, max_derivative=1)
+
+        # Store SNR
+        self.SNR = SNR
+
+    def __call__(cls, f, coeffs ):
+        """
+            Set of Differential equations to solve the Stewart-Landau Equation.
+
+            The equation is set up in the following format:
+
+        **Explicit methods**
+
+        <du/dt>=[dt/dt, dtheta/dt]=[mu*r - r^3, gamma - beta*r^2]
+
+        Where
+
+        Args:
+            f (float, numpy ndarray):   The function values of the Stewart-Landau equation. Will
+                                        be a 2D array of the form [r, theta].
+
+            coeffs (float): A list, tuple, or array of the coefficients in the Stewart-Landau 
+                                        equation. The order is [mu, gamma, beta].
+
+        """
+
+        # Pull the coefficients
+        mu = coeffs[0]
+        gamma = coeffs[1]
+        beta = coeffs[2]
+
+        # Pull the boundary conditions
+        r = f[0]
+        theta = f[1]
+
+        # Create the time step
+        dr_dt = mu*r - r**3
+        dtheta_dt = gamma - beta*r**2
+        du_dt = np.array( [dr_dt, dtheta_dt] ) * ( np.ones(2) + cls.SNR*np.random.randn(2) )
+
+        return du_dt
 
 
 
