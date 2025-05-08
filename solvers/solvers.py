@@ -60,7 +60,7 @@ class problem1D:
     that specific problems can inherit the attributes and methods to solve specific PDE's.
 
     """
-    def __init__(self, x, u_0, t_ends, coeffs=[0], dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
+    def __init__(self, x, u_0, t_ends, coeffs=[0], dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_set=( ["periodic", "periodic"], [None, None], [None, None] ) ):
         """
             Initialize the 1D problem. For all objects, attributes, and methods that follow, the 
         unit system must be SI or equivalent.
@@ -129,8 +129,7 @@ class problem1D:
             self.spatialBC_order = spatial_order
         
         # Set up the boundary conditions
-        self.BC_x = BC_x
-        self.BC_dx = BC_dx
+        self.BC_set = BC_set
 
         # Set up the time integrator
         self.time_integrator = time_integrator
@@ -147,17 +146,21 @@ class problem1D:
 
         # Set up the integrator
         if cls.time_integrator.lower() in ["lax", "euler"]:
-            cls.integrator = explicitEuler( cls.eqn, cls.x, cls.u_0, (cls.t_start, cls.t_end), cls.dt, cls.coeffs, cls.BCs, C=cls.C, spatial_order=cls.spatial_order, spatialBC_order=cls.spatialBC_order )
+            cls.integrator = explicitEuler( cls.eqn, cls.x, cls.u_0, (cls.t_start, cls.t_end), cls.dt, cls.coeffs, cls.BC_set, C=cls.C, spatial_order=cls.spatial_order, spatialBC_order=cls.spatialBC_order )
 
         # Solve the integrator
         cls.integrator.solve()
+
+        # Store the data
+        cls.u = cls.integrator.u
+        cls.t = cls.integrator.t
 
 class burgers1D(problem1D):
     """
         Solve the Burger's equation via an improved 1D solver that allows more flexible methods
     
     """
-    def __init__(self, x, u_0, t_ends, nu=0.0, dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] ):
+    def __init__(self, x, u_0, t_ends, nu=0.0, dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=["per", "per"], BC_dx=[None,None], BC_dx2=[None,None] ):
         """
             Initialize the Burger's equation.
 
@@ -191,7 +194,8 @@ class burgers1D(problem1D):
                                                     conditions. Defaults to None, which sets the 
                                                     value to "spatial_order".
 
-            BC_x (_type_, optional):    The boundary conditions as a function of x. Defaults to None.
+            BC_x (_type_, optional):    The boundary conditions as a function of x. Defaults to 
+                                            None.
 
             BC_dx (list, optional):     The boundary condition as a gradient of x. Defaults to 
                                             [0,None].
@@ -199,17 +203,15 @@ class burgers1D(problem1D):
         """
 
         # Initialize the parent object
-        super().__init__(x, u_0, t_ends, coeffs=[nu], dt=None, C=None, time_integrator="lax", spatial_order=2, spatialBC_order=None, BC_x=None, BC_dx=[0,None] )
+        super().__init__(x, u_0, t_ends, coeffs=[nu], dt=dt, C=C, time_integrator=time_integrator, spatial_order=spatial_order, spatialBC_order=spatialBC_order, BC_set=( BC_x, BC_dx, BC_dx2 ) )
 
         # Set up the Burger's equation
         if nu==0:
-            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=spatialBC_order, stepping="explicit", viscid=False )
+            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=self.spatialBC_order, stepping="explicit", viscid=False )
         else:
-            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=spatialBC_order, stepping="explicit", viscid=True )
+            self.eqn = burgers_eqn( spatial_order=self.spatial_order, spatialBC_order=self.spatialBC_order, stepping="explicit", viscid=True )
 
 
-        # Set up the boundary conditions
-        self.BCs = [ self.BC_x, self.BC_dx ]
 
 #==================================================================================================
 #

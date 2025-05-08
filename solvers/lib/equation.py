@@ -152,7 +152,7 @@ class eqn_problem(object):
         if not BC_x[0]==None:
             bc_count+=1
             # ie: Hold the same values at this location
-            if not BC_x[0] in ["same""per", "periodic"]:
+            if not BC_x[0] in ["same", "per", "periodic"]:
                 cls.E[0,0]=1
                 cls.e[0]=BC_x[0]
             elif BC_x[0].lower() in ["per", "periodic"]:
@@ -165,7 +165,7 @@ class eqn_problem(object):
         if not BC_x[-1]==None:
             bc_count+=1
             # ie: Hold the same values at this location
-            if not BC_x[-1] in ["same""per", "periodic"]:
+            if not BC_x[-1] in ["same", "per", "periodic"]:
                     cls.E[-1,-1]=1
                     cls.e[-1]=BC_x[-1]
             elif BC_x[-1].lower() in ["per", "periodic"]:
@@ -178,7 +178,7 @@ class eqn_problem(object):
         if not BC_dx[0]==None:
             bc_count+=1
             # ie: Hold the same values at this location
-            if not BC_dx[0] in ["same""per", "periodic"]:
+            if not BC_dx[0] in ["same", "per", "periodic"]:
                 cls.E[0,:]=cls.gradient_matrices[0][0,:]
                 cls.e[0]=BC_dx[0]
             elif BC_x[0].lower() in ["per", "periodic"]:
@@ -191,7 +191,7 @@ class eqn_problem(object):
         if not BC_dx[-1]==None:
             bc_count+=1
             # ie: Hold the same values at this location
-            if not BC_dx[-1] in ["same""per", "periodic"]:
+            if not BC_dx[-1] in ["same", "per", "periodic"]:
                 cls.E[-1,:]=cls.gradient_matrices[0][-1,:]
                 cls.e[-1]=BC_dx[-1]
             elif BC_x[0].lower() in ["per", "periodic"]:
