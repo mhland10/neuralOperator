@@ -75,7 +75,7 @@ space_order = 4
 #
 # Move to script directory
 #
-os.chdir(os.path.realpath(__file__)[:-34])
+#os.chdir(os.path.realpath(__file__)[:-34])
 
 
 #==================================================================================================
@@ -127,7 +127,7 @@ for i in range( len( i_flat ) ):
     # Initialize the burgers equation object - in this one we will use the original Burger's 
     #   equation that came out of the CFD class
     print(f"Solving Burger index {i}: A={AA[loc]:.3e}, c={cc[loc]:.3e}, snr={ss[loc]:.3e}")
-    hello = burgers1D( x, u_0_s[loc], (0, t_end), dt=0.5e-3, spatial_order=space_order )
+    hello = burgers1D( x, u_0_s[loc], (0, t_end), dt=10.0e-6, spatial_order=space_order, nu=0.01 )
     #hello = burgersEquation_og(x, u_0_s[loc], (0, t_end), C=C )
     # Solve the Burger's equation via a spatial order of 2, this can be changed
     hello.solve()

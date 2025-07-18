@@ -169,8 +169,8 @@ class numericalGradient:
 
         """
 
-        if len( f_x ) != len( x ):
-            raise ValueError( "Lengths of input discrete arrays are not the same." )
+        #if len( f_x ) != len( x ):
+        #    raise ValueError( "Lengths of input discrete arrays are not the same." )
 
         gradient = np.zeros( np.shape( f_x ) )
         dx = np.mean( np.gradient( x ) )
