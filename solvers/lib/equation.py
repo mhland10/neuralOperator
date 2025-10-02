@@ -464,7 +464,118 @@ def wavelet_contraction( lower_wavelet_in, upper_wavelet_in, contraction_level )
 
     return lower_wavelet, upper_wavelet
 
+def samplesToCoeffsDWT( N_samples, N_levels, support, verbosity=0 ):
+    """
+        This determines which samples of the original signal are represented by the coefficients
+    for each level of the DWT.
 
+        Note that this only pertains to a 1D DWT of multiple levels.
+
+    Args:
+        N_samples (int):    The number of samples in the original signal.
+
+        N_levels (int): The number of levels in the DWT.
+
+        support (int): The number of samples in the wavelet used in the DWT.
+
+    Returns:
+        coeff_list (list, int): A list of integers where each integer represents the number of coefficients at each level of the DWT. In the format:
+
+                                [ level ][ coefficient index, sample index ]
+
+    """
+
+    coeff_list = []
+    for i in np.arange( N_levels ):
+        # The number of coefficients at this level
+        N_samples_perLevel = np.ceil( N_samples / ( 2 ** i ) ).astype(int)
+
+        # The number of samples represented by each coefficient
+        N_samples_per_coeff = int( support * ( 2 ** i ) )
+
+        # The number of coefficients that can be represented at this level
+        if i==0:
+            data_length=N_samples
+        else:
+            data_length=N_coeffs_per_level
+        N_coeffs_per_level = np.floor( ( data_length + support - 1 )/2 )
+        N_coeffs_per_level = int( N_coeffs_per_level )
+
+        if verbosity > 0:
+            print( f"Level {i}: {N_samples_perLevel} samples, each coefficient representing {N_samples_per_coeff} samples, totaling {N_coeffs_per_level} coefficients" )
+
+        #
+        #   Produce the list of indices from the original signal that are represented by each coefficient
+        # 
+        coeff_list_atLevel = np.zeros( ( N_coeffs_per_level, N_samples_per_coeff ), dtype=int )
+        if verbosity > 1:
+            print( f"\tcoeff_list_atLevel.shape: {coeff_list_atLevel.shape}" )
+        for j in np.arange( coeff_list_atLevel.shape[0] ):
+            coeff_list_atLevel[j, :] = np.arange( j * (2**(i+1)), j * (2**(i+1)) + N_samples_per_coeff )-(2**(i))-1
+
+        # Check if the last coefficient goes over for over samples and shift as needed
+        #"""
+        if np.max( coeff_list_atLevel ) >= N_samples:
+            difference = np.max( coeff_list_atLevel ) - N_samples
+            if verbosity > 0:
+                print( f"\tLast coefficient goes over the number of samples, shifting by {difference//2}" )
+            coeff_list_atLevel = coeff_list_atLevel - difference // 2
+        #"""
+
+        coeff_list += [ coeff_list_atLevel ]
+
+
+    return coeff_list
+
+def lineDomainDWT( domain, N_levels, support, verbosity=0 ):
+    """
+        This function converts a 1D domain into the equivalent domain represented by the DWT coefficients.
+    
+
+    Args:
+        domain (float, array):  The original domain to be converted.
+
+        N_levels (int): The number of levels in the DWT.
+
+        support (int): The number of samples in the wavelet used in the DWT.
+
+    Returns:
+        DWT_domain (float, list): The domain represented by the DWT coefficients. Will be in format:
+                                    [ level ][ coefficient index ]
+
+                                    
+    """
+
+    # Pull the coefficients for the domain
+    coeffs = samplesToCoeffsDWT( domain.shape[0], N_levels, support )
+
+    # Initialize the DWT domain
+    DWT_domain = []
+    for l in np.arange( N_levels ):
+        if verbosity > 0:
+            print(f"Level {l}:")
+        DWT_domain_atLevel = np.zeros( coeffs[l].shape[0] )
+        for c in np.arange( coeffs[l].shape[0] ):
+            if verbosity > 0:
+                print(f"\tCoefficient {c}:\t{coeffs[l][c]}")
+
+            # Correct for lower bound
+            filtered_coeffs = coeffs[l][c][coeffs[l][c]>=0]
+
+            # Correct for upper bound
+            filtered_coeffs = filtered_coeffs[filtered_coeffs<domain.shape[0]]
+
+            # Add the domain represented by this coefficient
+            domain_at_coeff = domain[ filtered_coeffs ]
+            if verbosity > 1:
+                print(f"\t\tDomain at coefficient {c}:\t{domain_at_coeff}")
+
+            # Calculate the centroid for the domain at the coefficient
+            DWT_domain_atLevel[c] = np.mean( domain_at_coeff )
+
+        DWT_domain += [ DWT_domain_atLevel ]
+
+    return DWT_domain
 
 class wavelet_eqn(eqn_problem):
     """
@@ -472,7 +583,7 @@ class wavelet_eqn(eqn_problem):
 
     """
 
-    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", max_derivative=4 ):
+    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", max_derivative=2, N_levels=1, wavelet="db2", signal_extension="zero" ):
         """
             Initialize the DWT equation problem.
 
@@ -492,7 +603,12 @@ class wavelet_eqn(eqn_problem):
 
             max_derivative (int, optional): The maximum derivative that will be calculated in space
                                                 for the equation. Will come from the equation 
-                                                object. Default value is 4.
+                                                object. Default value is 2.
+
+            N_levels (int): The number of levels in the DWT.
+
+            wavelet (str):  The type of wavelet to be used in the DWT. Defaults to "db2", or Daubechies
+                                with 2 vanishing moments.
 
         Attributes:
             spatial_order <= spatial_order
@@ -516,227 +632,198 @@ class wavelet_eqn(eqn_problem):
         # Initialize from eqn_problem
         super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=max_derivative)
 
-    def kernel( cls, x, wt_family, levels=None, wt_mode="symmetric" ):
+        # Store wavelet data
+        self.N_levels = N_levels
+        self.wavelet = wavelet
+        self.support = pywt.Wavelet( wavelet ).dec_len
+        self.signal_extension = signal_extension
+
+    def domain_initialization(cls, x_domain ):
         """
-            This method creates the kernels that linearize the wavelet transform.
+            This method takes the domain the wavelet equation is being solved on and initializes
+        the domain that the wavelet coefficients are present on.
 
         Args:
-            x (float, numpy ndarray):   This is the 1D spatial domain that the wavelet transform 
-                                        will be applied to.
+            x_domain (numpy 1Darray - float): The spatial domain that the wavelet equation is being
+                                                solved on.
 
-            wt_family (string): The wavelet family that will be used in the DWT.
+        """
+        # Store the original domain
+        cls.x_domain = x_domain
+        
+        # Calculate and store the DWT domain
+        cls.DWT_domain = lineDomainDWT( x_domain, cls.N_levels, cls.support )[::-1]
 
-            levels (int, optional): The number of levels that the wavelet transform will be applied
-                                        to. Defaults to None, which will use the maximum number of
-                                        levels that can be applied to the data.
+    def wavelet_initialization(cls, u_0, storage_level=0 ):
+        """
+            This method takes the initial condition and converts it to the wavelet coefficients.
+        This allows the object to initialize the solution in the wavelet space.
+
+        Args:
+            u_0 (numpy 1Darray - float):    The initial condition to be converted to wavelet space.
+
+            storage_level (int, optional):  The amount of things to store in the object.
 
         """
         # Import PyWavelets, we do this here so other 1D equations don't need to import it
         import pywt
-        import scipy.sparse as spsr
 
-        # Set the wavelet family
-        cls.wt_family = wt_family
-        cls.wt = pywt.Wavelet( wt_family )
+        # Check that the initial condition is the same size as the domain
+        if not u_0.shape[0] == cls.x_domain.shape[0]:
+            raise ValueError("Initial condition must be the same size as the domain.")
+        
+        # Initialize the function and store
+        cls.u = []
+        cls.u += [ u_0 ]
+        """
+            Note that we are storing the function in the format:
 
-        # Set the domain
-        cls.x = x
-        cls.dx = np.mean( np.gradient( cls.x ) )
+        u[time index][x-domain index]
 
-        # Set the levels
-        cls.max_levels = pywt.dwt_max_level( len(x), cls.wt.dec_len )
-        if levels is None:
-            cls.levels = cls.max_levels
+            Where the x-domain index listing represents a NumPy array.
+
+        """
+
+        # Perform the DWT to get the coefficients
+        if cls.N_levels==1:
+            coeffs = pywt.dwt( cls.u[0], cls.wavelet, mode=cls.signal_extension )
+        elif cls.N_levels>1:
+            coeffs = pywt.wavedec( cls.u[0], cls.wavelet, mode=cls.signal_extension, level=cls.N_levels )
         else:
-            cls.levels = levels
-
-        # Set the size of the DWT
-        coeffs_samples = pywt.wavedec( np.zeros_like(x), cls.wt_family, mode=wt_mode, level=cls.levels )
-        cls.level_sizes = []
-        for i in range( len( coeffs_samples ) ):
-            cls.level_sizes += [ coeffs_samples[i].shape[0] ]
-        cls.level_sizes = np.array( cls.level_sizes, dtype=int )
-
-        # Set the start/end indices of the wavelet transform
-        cls.end_indices = np.cumsum( cls.level_sizes )
-        cls.start_indices = np.roll( cls.end_indices, 1 )
-        cls.start_indices[0] = 0
-
+            raise ValueError("N_levels must be at least 1.")
+        if storage_level>0:
+            cls.raw_coeffs = coeffs
         
+        # Move coefficients into storage
+        cls.coefficients = {}
+        cls.coefficients["a"] = coeffs[0]
+        if cls.N_levels>1:
+            for i in range( cls.N_levels ):
+                cls.coefficients[f"d_l{i}"] = coeffs[i+1]
+        else:
+            cls.coefficients["d"] = coeffs[1]
+        """
+            Note that we are storing the coefficients in the following format:
 
+        For single level:
+            coefficients["a"] -> The approximation coefficients
+            coefficients["d"] -> The detail coefficients
 
-        
+        For multi-level:
+            coefficients["a"] -> The approximation coefficients
+            coefficients["d_l<level index>"] -> The detail coefficients
 
+            Note that the level index increases with more detail.
 
-    def autokernel(cls ):
+        """
 
+    def derivatives(cls, storage_level=0, convolution_mode="same", front_offset=1, verbosity=0 ):
+        """
+            This method calculates the spatial derivatives via the DWT projection method
 
+        Args:
+            storage_level (int, optional):  The amount of things to store in the object.
+
+            convolution_mode (str, optional):   The mode to define the 
+
+        """
+        import pywt
+
+        # Initialize the list that stores the derivatives
+        cls.derivatives = []
+
+        #=============================================================
         #
-        # Set the autokernel or Gram matrix
+        #   Calculate the 1st Spatial Derivative
         #
-        cls.M = spsr.csr_matrix( ( np.sum(cls.level_sizes), np.sum(cls.level_sizes) ), dtype=float )
-        # Iterate over the row sets that pertain to the levels
-        for li in range( cls.levels+1 ):
-            #print(f"Row level index {li} from rows [{cls.start_indices[li]}, {cls.end_indices[li]}]")
+        #=============================================================
 
-            # Select the row-based wavelet shape
-            if cls.start_indices[li]==0:
-                #print(f"\tSelecting scaling function for row")
-                row_level = 1
-                row_wavelet = cls.wt.wavefun( level = row_level )[0][::-1]
+        # Initialize storage value
+        if storage_level>0:
+            cls.deriv_raw = {}
+            cls.subgrid_raw = {}
+
+        # Initialize the storage of the 1st derivative coefficients
+        first_derivative = {}
+        if storage_level>0:
+            cls.first_derivative = {}
+
+        for i, k in enumerate( list( cls.coefficients.keys() ) ):
+            print(f"i={i}")
+            # Pull the coefficients at the level the key describes
+            coefficients_atLevel = cls.coefficients[k]
+            level_i = i-1
+            
+            # Initialize a numpy matrix that will hold the data for the 1st derivative calculation
+            deriv1_raw = np.zeros( ( 2, coefficients_atLevel.shape[0] ) )
+
+            # Calculate the spacing between values
+            dx = np.gradient( cls.DWT_domain[max(0,level_i)] )
+
+            # Calculate the first derivative for the coefficient term
+            if cls.spatial_order<=2:
+                print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
+                print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
+                deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
             else:
-                #print(f"\tSelecting wavelet function for row")
-                row_level = li
-                row_wavelet = cls.wt.wavefun( level = row_level )[1][::-1]
-            #print(f"\t\tRow wavelet:\t{row_wavelet}")
+                import warnings
+                warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
+                deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
 
-            for lj in range( cls.levels+1 ):
-                #print(f"\tColumns level index {lj} from rows [{cls.start_indices[lj]}, {cls.end_indices[lj]}]")
-
-                # Select the column-based wavelet shape
-                if cls.start_indices[lj]==0:
-                    #print(f"\t\tSelecting scaling function for column")
-                    col_level = 1
-                    col_wavelet = cls.wt.wavefun( level = col_level )[0]
+            # Calculate the first derivative for the subgrid term
+            if i==0:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
+            else:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
+            n = len(tilde_wavelet) + len(dec_wavelet) - 1
+            n_padded = 2**int(np.ceil(np.log2(n)))
+            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
+            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
+            f_domain = np.zeros( ( len(dx), n_padded ) )
+            k_domain = np.zeros( ( len(dx), n_padded ) )
+            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
+            subgrid = np.zeros( ( len(dx), len(dx) ) )
+            for jj in range( len(dx) ):
+                if verbosity>0:
+                    print(f"jj={jj}")
+                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                    if verbosity>1:
+                        print(f"Edge found")
                 else:
-                    #print(f"\t\tSelecting wavelet function for column")
-                    col_level = lj
-                    col_wavelet = cls.wt.wavefun( level = col_level )[1]
-                #print(f"\t\tColumn wavelet:\t{col_wavelet}")
-
-                """
-                # Calculate the level difference
-                level_diff = row_level - col_level
-                print(f"\t\tLevel difference: {level_diff}")
-                row_wavelet_hold = row_wavelet.copy()
-                col_wavelet_hold = col_wavelet.copy()
-                if np.abs(level_diff)>0:
-                    col_wavelet = np.array( col_wavelet )
-                    #col_wavelet *= 2**(-level_diff/2)
-                    if level_diff>0:
-                        print(f"\t\t\tDilation needed")
-                        _, col_wavelet = wavelet_dilation( row_wavelet, col_wavelet, np.abs( level_diff ) )
-                        col_wavelet *= 2**(-level_diff/2)
+                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
+                    k_domain[jj] = f_domain[jj] # 2*np.pi
+                    F_subgrid[jj] = 1j * k_domain[jj] * F_tilde_wavelet * F_dec_wavelet
+                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
+                    if front_offset>0:
+                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
                     else:
-                        print(f"\t\t\tContraction needed")
-                        _, col_wavelet = wavelet_contraction( row_wavelet, col_wavelet, np.abs( level_diff ) )
-                        col_wavelet *= 2**(level_diff/2)
+                        filt_subgrid = np.real( raw_subgrid[::2] )
+                    start = max( 0, jj-len(filt_subgrid)//2 )
+                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
+                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
+                    if verbosity>1:
+                        print(f"\tFrequencies:\t{f_domain[jj]}")
+                        print(f"\tdx:\t{dx[jj]}")
+                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
+                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
+                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
+                        print(f"\tInserting into:\t{start}:{end}")
+                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
+                    subgrid[jj,start:end] = subgrid_insert
+            deriv1_raw[1] = np.matmul( subgrid, coefficients_atLevel )
+            if storage_level>0:
+                cls.subgrid_raw[k] = subgrid
 
-                    print(f"\t\t\tNew row wavelet shape: {row_wavelet}")
-                    print(f"\t\t\tNew column wavelet shape: {col_wavelet}")
-                #"""
+            # Calculate the first derivative
+            first_derivative[k] = np.sum( np.array( deriv1_raw ), axis=0 )
+            if storage_level>0:
+                cls.first_derivative[k] = first_derivative[k]
 
+            if storage_level>0:
+                cls.deriv_raw[k] = deriv1_raw
 
-                # Calculate raw convolution
-                convolve_factor = (2 ** -( ( row_level + col_level ) / 2 ))
-                #print(f"\t\tRow wavelet:\t{row_wavelet}")
-                #print(f"\t\tColumn wavelet:\t{col_wavelet}")
-                #print(f"\t\tConvolve factor: {convolve_factor}")
-                raw_c = np.convolve( row_wavelet, col_wavelet, mode="valid" ) 
-                #print(f"\t\tRaw convolution shape: {raw_c.shape}")
-                #print(f"\t\tRaw convolution: {raw_c}")
-                #print(f"\t\tRaw convolution sum: {np.sum(raw_c)}")
-
-                # Calculate the inner product
-                #print(f"\t\tSplit is {np.ceil( ( row_level + col_level )/2).astype(int)}")
-                inner = raw_c[::np.ceil( ( row_level + col_level )/2).astype(int)] * convolve_factor
-                #inner = inner[cut:-cut]
-                #print(f"\t\tInner product cut: {cut}")
-                #print(f"\t\tInner product shape: {inner.shape}")
-                #print(f"\t\tInner product: {inner}")
-
-                for ii in range( cls.start_indices[li], cls.end_indices[li] ):
-                    #print(f"\t\tRow {ii}:")
-
-                    # Place the inner product in the row
-                    #print(f"\t\t\tHas length {cls.level_sizes[lj]} from lj {lj}")
-                    row = np.zeros( cls.level_sizes[lj] )
-                    row[:len(inner)]=inner
-                    row = np.roll( row, ii-cls.start_indices[li] )
-                    #print(f"\t\t\tRow:\t{row}")
-                    
-                    # Place the inner product in the matrix
-                    #print(f"\t\t\tPlacing inner product in matrix at {ii}, {cls.start_indices[lj]}:{cls.end_indices[lj]}")
-                    cls.M[ii, cls.start_indices[lj]:cls.end_indices[lj]] = row
-
-                #row_wavelet = row_wavelet_hold
-                #col_wavelet = col_wavelet_hold
-
-
-    def gradientKernel(cls ):
-
-
-        #
-        # Set the autokernel or Gram matrix
-        #
-        cls.D = spsr.csr_matrix( ( np.sum(cls.level_sizes), np.sum(cls.level_sizes) ), dtype=float )
-        # Iterate over the row sets that pertain to the levels
-        for li in range( cls.levels+1 ):
-            print(f"Row level index {li} from rows [{cls.start_indices[li]}, {cls.end_indices[li]}]")
-
-            # Select the row-based wavelet shape
-            if cls.start_indices[li]==0:
-                print(f"\tSelecting scaling function for row")
-                row_level = 1
-                row_wavelet = cls.wt.wavefun( level = row_level )[0][::-1]
-            else:
-                print(f"\tSelecting wavelet function for row")
-                row_level = li
-                row_wavelet = cls.wt.wavefun( level = row_level )[1][::-1]
-            print(f"\t\tRow wavelet:\t{row_wavelet}")
-
-            for lj in range( cls.levels+1 ):
-                print(f"\tColumns level index {lj} from rows [{cls.start_indices[lj]}, {cls.end_indices[lj]}]")
-
-                # Select the column-based wavelet shape
-                if cls.start_indices[lj]==0:
-                    print(f"\t\tSelecting scaling function for column")
-                    col_level = 1
-                    col_wavelet = cls.wt.wavefun( level = col_level )[0]
-                else:
-                    print(f"\t\tSelecting wavelet function for column")
-                    col_level = lj
-                    col_wavelet = cls.wt.wavefun( level = col_level )[1]
-                gradient_factor = (2**(col_level-1))
-                print(f"\t\tGradient factor: {gradient_factor}")
-                col_wavelet = np.gradient( col_wavelet, cls.dx / gradient_factor )
-                print(f"\t\tColumn wavelet:\t{col_wavelet}")
-
-                # Calculate raw convolution
-                convolve_factor = (2 ** -( ( row_level + col_level ) / 2 ))
-                print(f"\t\tRow wavelet:\t{row_wavelet}")
-                print(f"\t\tColumn wavelet:\t{col_wavelet}")
-                print(f"\t\tConvolve factor: {convolve_factor}")
-                raw_c = np.convolve( row_wavelet, col_wavelet, mode="valid" ) 
-                print(f"\t\tRaw convolution shape: {raw_c.shape}")
-                print(f"\t\tRaw convolution: {raw_c}")
-                print(f"\t\tRaw convolution sum: {np.sum(raw_c)}")
-
-                # Calculate the inner product
-                print(f"\t\tSplit is {np.ceil( ( row_level + col_level )/2).astype(int)}")
-                inner = raw_c[::np.ceil( ( row_level + col_level )/2).astype(int)] * convolve_factor
-                #inner = inner[cut:-cut]
-                #print(f"\t\tInner product cut: {cut}")
-                print(f"\t\tInner product shape: {inner.shape}")
-                print(f"\t\tInner product: {inner}")
-
-                for ii in range( cls.start_indices[li], cls.end_indices[li] ):
-                    print(f"\t\tRow {ii}:")
-
-                    # Place the inner product in the row
-                    print(f"\t\t\tHas length {cls.level_sizes[lj]} from lj {lj}")
-                    row = np.zeros( cls.level_sizes[lj] )
-                    row[:len(inner)]=inner
-                    row = np.roll( row, ii-cls.start_indices[li] )
-                    print(f"\t\t\tRow:\t{row}")
-                    
-                    # Place the inner product in the matrix
-                    print(f"\t\t\tPlacing inner product in matrix at {ii}, {cls.start_indices[lj]}:{cls.end_indices[lj]}")
-                    cls.D[ii, cls.start_indices[lj]:cls.end_indices[lj]] = row
-
-                #row_wavelet = row_wavelet_hold
-                #col_wavelet = col_wavelet_hold  
-
-
+        cls.derivatives += [first_derivative]
 
 
