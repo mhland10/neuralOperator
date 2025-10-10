@@ -259,7 +259,7 @@ class burgers_eqn(eqn_problem):
 
         **Explicit methods**
 
-        <du/dt>=[A]<u>+[B]<f>+[E]<e>
+        <du/dt>=[A]<u>-[B]<f>+[E]<e>
 
         Where 
         - <du/dt> is the time derivative of the solution, which is the output
@@ -740,8 +740,8 @@ class wavelet_eqn(eqn_problem):
 
         # Initialize storage value
         if storage_level>0:
-            cls.deriv_raw = {}
-            cls.subgrid_raw = {}
+            cls.firstDeriv_raw = {}
+            cls.subgridFirstDeriv_raw = {}
 
         # Initialize the storage of the 1st derivative coefficients
         first_derivative = {}
@@ -749,7 +749,8 @@ class wavelet_eqn(eqn_problem):
             cls.first_derivative = {}
 
         for i, k in enumerate( list( cls.coefficients.keys() ) ):
-            print(f"i={i}")
+            if verbosity>0:
+                print(f"i={i}")
             # Pull the coefficients at the level the key describes
             coefficients_atLevel = cls.coefficients[k]
             level_i = i-1
@@ -758,12 +759,13 @@ class wavelet_eqn(eqn_problem):
             deriv1_raw = np.zeros( ( 2, coefficients_atLevel.shape[0] ) )
 
             # Calculate the spacing between values
-            dx = np.gradient( cls.DWT_domain[max(0,level_i)] )
+            dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
 
             # Calculate the first derivative for the coefficient term
             if cls.spatial_order<=2:
-                print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
-                print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
+                if verbosity>0:
+                    print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
+                    print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
                 deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
             else:
                 import warnings
@@ -814,7 +816,7 @@ class wavelet_eqn(eqn_problem):
                     subgrid[jj,start:end] = subgrid_insert
             deriv1_raw[1] = np.matmul( subgrid, coefficients_atLevel )
             if storage_level>0:
-                cls.subgrid_raw[k] = subgrid
+                cls.subgridFirstDeriv_raw[k+"_1stDer"] = subgrid
 
             # Calculate the first derivative
             first_derivative[k] = np.sum( np.array( deriv1_raw ), axis=0 )
@@ -822,8 +824,277 @@ class wavelet_eqn(eqn_problem):
                 cls.first_derivative[k] = first_derivative[k]
 
             if storage_level>0:
-                cls.deriv_raw[k] = deriv1_raw
+                cls.firstDeriv_raw[k+"_1stDer"] = deriv1_raw
 
         cls.derivatives += [first_derivative]
 
+        #=============================================================
+        #
+        #   Calculate the 2nd Spatial Derivative
+        #
+        #=============================================================
+        #"""
+        # Initialize storage value
+        if storage_level>0:
+            cls.secondDeriv_raw = {}
+            cls.subgridSecondDeriv_raw = {}
+            cls.dilationSecondDeriv_raw = {}
 
+        # Initialize the storage of the 2nd derivative coefficients
+        second_derivative = {}
+        if storage_level>0:
+            cls.second_derivative = {}
+
+        for i, k in enumerate( list( cls.coefficients.keys() ) ):
+            if verbosity>0:
+                print(f"i={i}")
+            # Pull the coefficients at the level the key describes
+            coefficients_atLevel = cls.coefficients[k]
+            level_i = i-1
+            
+            # Initialize a numpy matrix that will hold the data for the 2nd derivative calculation
+            deriv2_raw = np.zeros( ( 3, coefficients_atLevel.shape[0] ) )
+
+            # Calculate the spacing between values
+            dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
+
+            # Calculate the first derivative for the coefficient term
+            if cls.spatial_order<=2:
+                if verbosity>0:
+                    print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
+                    print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
+                deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+            else:
+                import warnings
+                warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
+                deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+
+            # Calculate the second derivative for the dilation term
+            if i==0:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
+            else:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
+            n = len(tilde_wavelet) + len(dec_wavelet) - 1
+            n_padded = 2**int(np.ceil(np.log2(n)))
+            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
+            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
+            f_domain = np.zeros( ( len(dx), n_padded ) )
+            k_domain = np.zeros( ( len(dx), n_padded ) )
+            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
+            subgrid = np.zeros( ( len(dx), len(dx) ) )
+            for jj in range( len(dx) ):
+                if verbosity>0:
+                    print(f"jj={jj}")
+                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                    if verbosity>1:
+                        print(f"Edge found")
+                else:
+                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
+                    k_domain[jj] = f_domain[jj] # 2*np.pi
+                    F_subgrid[jj] = 1j * k_domain[jj] * F_tilde_wavelet * F_dec_wavelet
+                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
+                    if front_offset>0:
+                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
+                    else:
+                        filt_subgrid = np.real( raw_subgrid[::2] )
+                    start = max( 0, jj-len(filt_subgrid)//2 )
+                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
+                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
+                    if verbosity>1:
+                        print(f"\tFrequencies:\t{f_domain[jj]}")
+                        print(f"\tdx:\t{dx[jj]}")
+                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
+                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
+                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
+                        print(f"\tInserting into:\t{start}:{end}")
+                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
+                    subgrid[jj,start:end] = subgrid_insert
+            deriv2_raw[1] = np.matmul( subgrid, np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ) )
+            if storage_level>0:
+                cls.dilationSecondDeriv_raw[k+"_2ndDer"] = subgrid
+
+            # Calculate the second derivative for the subgrid term
+            if i==0:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
+            else:
+                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
+                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
+            n = len(tilde_wavelet) + len(dec_wavelet) - 1
+            n_padded = 2**int(np.ceil(np.log2(n)))
+            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
+            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
+            f_domain = np.zeros( ( len(dx), n_padded ) )
+            k_domain = np.zeros( ( len(dx), n_padded ) )
+            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
+            subgrid = np.zeros( ( len(dx), len(dx) ) )
+            for jj in range( len(dx) ):
+                if verbosity>0:
+                    print(f"jj={jj}")
+                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                    if verbosity>1:
+                        print(f"Edge found")
+                else:
+                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
+                    k_domain[jj] = f_domain[jj] # 2*np.pi
+                    F_subgrid[jj] = - ( k_domain[jj]**2 ) * F_tilde_wavelet * F_dec_wavelet
+                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
+                    if front_offset>0:
+                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
+                    else:
+                        filt_subgrid = np.real( raw_subgrid[::2] )
+                    start = max( 0, jj-len(filt_subgrid)//2 )
+                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
+                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
+                    if verbosity>1:
+                        print(f"\tFrequencies:\t{f_domain[jj]}")
+                        print(f"\tdx:\t{dx[jj]}")
+                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
+                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
+                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
+                        print(f"\tInserting into:\t{start}:{end}")
+                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
+                    subgrid[jj,start:end] = subgrid_insert
+            deriv2_raw[-1] = np.matmul( subgrid, coefficients_atLevel )
+            if storage_level>0:
+                cls.subgridSecondDeriv_raw[k+"_2ndDer"] = subgrid
+
+            # Calculate the second derivative
+            second_derivative[k] = np.sum( np.array( deriv2_raw ), axis=0 )
+            if storage_level>0:
+                cls.second_derivative[k] = second_derivative[k]
+
+            if storage_level>0:
+                cls.secondDeriv_raw[k+"_2ndDer"] = deriv2_raw
+
+        cls.derivatives += [second_derivative]
+
+        #"""
+
+    def boundaryConditioning(cls ):
+        """
+            This method alters the coefficients and allows for the boundary conditions to allow for
+        boundary condition operation.
+
+        """
+
+        #=============================================================
+        #
+        #   Set data coefficients to zero at BCs
+        #
+        #=============================================================
+        for k in list( cls.coefficients.keys() ):
+            cls.coefficients[k][:1] = 0
+            cls.coefficients[k][-2:] = 0
+
+
+class burgers_DWTeqn(wavelet_eqn):
+    """
+        This object contains the data and methods to solve the Burgers Equatio via Discrete Wavelet
+    Transform methods. Inheritance chain is:
+
+    General PDE problem (eqn_problem) -> DWT PDE problem (wavelet_eqn) -> Burger's Equation PDE
+        problem (burgers_DWTeqn)
+    
+    """
+    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", viscid=True, N_levels=1, wavelet="db2", signal_extension="zero" ):
+        """
+            Initialize the Burgers Equation problem.
+
+        Args:
+            spatial_order (int, optional):  The theoretical order that the spatial gradient will be
+                                                calculated by, i.e. the number of points in the 
+                                                stencil. Defaults to 2.
+
+            spatialBC_order (int, optional):    The theoretical order that the spatial gradient
+                                                    will be calculated by at the boundary 
+                                                    conditions. Defaults to None, which sets the 
+                                                    value to "spatial_order".
+
+            stepping (str, optional):   The stepping method that will be used to solve the PDE.
+                                            Defaults to "explicit", or can be implicit. Not case
+                                            sensitive.
+
+            viscid (bool, optional):    If the problem will be a viscous Burger's equation that
+                                            includes the diffusion. This in turn determines the
+                                            maximum derivative that will be used.
+
+            N_levels (int): The number of levels in the DWT.
+
+            wavelet (str):  The type of wavelet to be used in the DWT. Defaults to "db2", or Daubechies
+                                with 2 vanishing moments.
+        
+        """
+        # Set up boundary condition order
+        if spatialBC_order is None:
+            spatialBC_order = spatial_order
+        print(f"Spatial order is {spatial_order}")
+
+        # Initialize from eqn_problem
+        if viscid:
+            super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=2, N_levels=N_levels, wavelet=wavelet, signal_extension=signal_extension )
+        else:
+            super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1, N_levels=N_levels, wavelet=wavelet, signal_extension=signal_extension )
+        self.viscid=viscid
+
+    def __call__(cls, x, u, coeffs, BCs, *args):
+        """
+            Set of Differential equations to solve the Burgers Equation.
+
+            The equation is set up in the following format:
+
+        **Explicit methods**
+
+        <du/dt>=nu<d2u/dx2>-<u(interpolated)>o<du/dx>
+
+        Where 
+        - <du/dt> is the time derivative of the solution, which is the output
+        - nu is the diffusion coefficient
+        - <d2u/dx2> is the second spatial gradient/Laplace operator that will be projected into 
+                    each wavelet basis space.
+        - <u(interpolated)> is the velocity interpolated onto the respective wavelet coefficient
+                            spatial domains.
+        - <du/dx> is the first spatial gradient/flux operator that will be projected into each 
+                    wavelet basis space.
+
+        Args:
+            x (np.ndarray):         The spatial grid
+
+            u (np.ndarray):         The function of the Burgers Equation
+
+            BC_x (np.ndarray):      The boundary conditions for the spatial grid
+
+            BC_dx (np.ndarray):     The boundary conditions for the spatial derivative
+        
+        """
+
+        nu=coeffs[0]
+
+        # Pull the boundary conditions
+        BC_x = BCs[0]
+        BC_dx = BCs[1]
+        if cls.viscid:
+            BC_dx2 = BCs[2]
+
+        # Call the parent class call method
+        if cls.viscid:
+            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx, BC_dx2=BC_dx2 )
+        else:
+            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx )
+
+        # Set up A-matrix - ie: 2nd derivative
+        if cls.viscid and not nu==0:
+            cls.A = nu * cls.gradient_matrices[1]
+
+        # Set up B-matrix
+        cls.B = cls.gradient_matrices[0].todia()
+        cls.f = u*u/2
+
+        # Sum to time derivative
+        du_dt = -cls.B.dot(cls.f) + cls.E.dot(cls.e)
+        if cls.viscid and not nu==0:
+            du_dt += -cls.A.dot(u)
+
+        return du_dt
