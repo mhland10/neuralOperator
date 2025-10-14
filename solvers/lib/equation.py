@@ -583,7 +583,7 @@ class wavelet_eqn(eqn_problem):
 
     """
 
-    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", max_derivative=2, N_levels=1, wavelet="db2", signal_extension="zero" ):
+    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", max_derivative=2, N_levels=1, wavelet="db2", signal_extension="zero", gradient_construction="split" ):
         """
             Initialize the DWT equation problem.
 
@@ -609,6 +609,25 @@ class wavelet_eqn(eqn_problem):
 
             wavelet (str):  The type of wavelet to be used in the DWT. Defaults to "db2", or Daubechies
                                 with 2 vanishing moments.
+
+            signal_extension (str):    The type of signal extension to be used in the DWT. Defaults
+                                        to "zero". Other options include "symmetric", "periodic", 
+                                        etc. Check the PyWavelets documentation for more details.
+
+            gradient_construction (str):  The method to construct the gradient in wavelet space. 
+                                            The valid options are:
+
+                                        -"*split":  This method splits the gradient across the 
+                                                    detial and approximation spaces. This assumes
+                                                    that \frac{\partial d}{\partial x}=0 and
+                                                    \frac{\partial \tilde{\phi}{\partial x}*\phi=0.
+
+                                        -"modified": This method modifies the gradient to across 
+                                                    the detail space. This assumes that
+                                                    \frac{\partial d}{\partial x}=0.
+
+                                        -"full": This method calculates the full gradient across
+                                                    both the detail and approximation spaces.
 
         Attributes:
             spatial_order <= spatial_order
@@ -637,6 +656,103 @@ class wavelet_eqn(eqn_problem):
         self.wavelet = wavelet
         self.support = pywt.Wavelet( wavelet ).dec_len
         self.signal_extension = signal_extension
+
+        # Store gradient construction method
+        self.gradient_construction = gradient_construction
+
+    def waveshape_precompute(cls ):
+        """
+            This method precomputes the wavelet shapes, their derivatives, and their inner 
+        products. This includes the DFT representation of the wavelet functions.
+
+        """
+        import pywt
+
+        #=============================================================
+        #
+        #   Precompute the wavelet shapes
+        #
+        #=============================================================
+
+        # Initialize storage values
+        cls.wavelet_shapes = {}
+
+        # Calculate the approximation function shape
+        cls.wavelet_shapes["phi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_lo
+        cls.wavelet_shapes["phi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_lo
+
+        # Calculate the wavelet function shape
+        cls.wavelet_shapes["psi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_hi
+        cls.wavelet_shapes["psi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_hi
+
+        cls.support = len( cls.wavelet_shapes["phi_decomp"] )
+
+        # Store the original keys
+        og_keys = list( cls.wavelet_shapes.keys() )
+        cls.og_keys = og_keys
+
+        # Calculate the padded shapes
+        n = len(cls.wavelet_shapes["phi_decomp"]) + len(cls.wavelet_shapes["phi_rebuild"]) - 1
+        n_padded = 2**int(np.ceil(np.log2(n)))
+        cls.n_padded = n_padded
+        n_diffference = n_padded - len(cls.wavelet_shapes["phi_decomp"])
+        for k in og_keys:
+            cls.wavelet_shapes[k] = np.array( cls.wavelet_shapes[k] )
+            cls.wavelet_shapes[f"{k}_padded"] = np.zeros( n_padded )
+            cls.wavelet_shapes[f"{k}_padded"][n_diffference//2:-n_diffference//2] = cls.wavelet_shapes[k]
+
+        #=============================================================
+        #
+        #   Precompute the wavelet shape DFT
+        #
+        #=============================================================
+
+        # Initialize storage values
+        cls.wavelet_shapes_DFT = {}
+
+        # Calculate the DFT of the wavelet shapes from the padded shapes
+        for k in og_keys:
+            cls.wavelet_shapes_DFT[k] = np.roll( np.fft.fft( cls.wavelet_shapes[f"{k}_padded"] ), n_padded//2 )
+
+        # Initialize storage of corresponding wavenumbers
+        cls.wavelet_shapes_wavenumbers_normalized = np.pi * np.roll( np.fft.fftfreq( n_padded ), n_padded//2 )
+
+        #=============================================================
+        #
+        #   Precompute the wavelet shape derivatives
+        #
+        #=============================================================
+
+        # Initialize storage values
+        cls.wavelet_shapes_deriv = {}
+
+        # Calculate the derivatives of the wavelet shapes
+        for k in og_keys:
+            cls.wavelet_shapes_deriv[k] = np.gradient( cls.wavelet_shapes[f"{k}_padded"], edge_order=1 )
+            # TODO: Add in higher order derivatives as needed
+            cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.gradient( cls.wavelet_shapes_deriv[k], edge_order=1 )
+
+        #=============================================================
+        #
+        #   Precompute the wavelet shape derivatives' convolution
+        #
+        #=============================================================
+
+        # Initialize storage values
+        cls.wavelet_shapes_deriv_convolution = {}
+        cls.wavelet_shapes_deriv_convolution_raw = {}
+
+        # Calculate the convolution of the derivatives of the wavelet shapes
+        for k in ["phi", "psi"]:
+            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            cls.wavelet_shapes_deriv_convolution_raw[f"{k}'*{k}"] = raw_convolution
+            cls.wavelet_shapes_deriv_convolution[f"{k}'*{k}"] = raw_convolution[::2]
+
+        # Calculate the convolution of the 2nd derivatives of the wavelet shapes
+        for k in ["phi", "psi"]:
+            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp_2ndDeriv"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            cls.wavelet_shapes_deriv_convolution_raw[f"{k}''*{k}"] = raw_convolution
+            cls.wavelet_shapes_deriv_convolution[f"{k}''*{k}"] = raw_convolution[::2]
 
     def domain_initialization(cls, x_domain ):
         """
@@ -717,14 +833,16 @@ class wavelet_eqn(eqn_problem):
 
         """
 
-    def derivatives(cls, storage_level=0, convolution_mode="same", front_offset=1, verbosity=0 ):
+    def derivatives(cls, storage_level=0, verbosity=0, nan_value=0 ):
         """
             This method calculates the spatial derivatives via the DWT projection method
 
         Args:
             storage_level (int, optional):  The amount of things to store in the object.
 
-            convolution_mode (str, optional):   The mode to define the 
+            verbosity (int, optional):   The amount of information to print to the terminal.
+
+            nan_value (float, optional): The value to use for NaN values. Defaults to 0.
 
         """
         import pywt
@@ -762,61 +880,41 @@ class wavelet_eqn(eqn_problem):
             dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
 
             # Calculate the first derivative for the coefficient term
-            if cls.spatial_order<=2:
-                if verbosity>0:
-                    print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
-                    print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
-                deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
-            else:
-                import warnings
-                warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
-                deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+            if (k=="a") or ( cls.gradient_construction.lower()=="full" ):
+                if cls.spatial_order<=2:
+                    if verbosity>0:
+                        print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
+                        print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
+                    deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+                else:
+                    import warnings
+                    warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
+                    deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )   
 
             # Calculate the first derivative for the subgrid term
-            if i==0:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
-            else:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
-            n = len(tilde_wavelet) + len(dec_wavelet) - 1
-            n_padded = 2**int(np.ceil(np.log2(n)))
-            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
-            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
-            f_domain = np.zeros( ( len(dx), n_padded ) )
-            k_domain = np.zeros( ( len(dx), n_padded ) )
-            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
             subgrid = np.zeros( ( len(dx), len(dx) ) )
             for jj in range( len(dx) ):
                 if verbosity>0:
                     print(f"jj={jj}")
-                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
                     if verbosity>1:
                         print(f"Edge found")
                 else:
-                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
-                    k_domain[jj] = f_domain[jj] # 2*np.pi
-                    F_subgrid[jj] = 1j * k_domain[jj] * F_tilde_wavelet * F_dec_wavelet
-                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
-                    if front_offset>0:
-                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
-                    else:
-                        filt_subgrid = np.real( raw_subgrid[::2] )
-                    start = max( 0, jj-len(filt_subgrid)//2 )
-                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
-                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
-                    if verbosity>1:
-                        print(f"\tFrequencies:\t{f_domain[jj]}")
-                        print(f"\tdx:\t{dx[jj]}")
-                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
-                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
-                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
-                        print(f"\tInserting into:\t{start}:{end}")
-                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
-                    subgrid[jj,start:end] = subgrid_insert
+                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
+                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
+                    if k.startswith("d"):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
+                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
             deriv1_raw[1] = np.matmul( subgrid, coefficients_atLevel )
             if storage_level>0:
                 cls.subgridFirstDeriv_raw[k+"_1stDer"] = subgrid
+
+            # Filter NaN's
+            if not nan_value is None:
+                deriv1_raw = np.nan_to_num( np.array( deriv1_raw ).astype(np.float64), nan=nan_value )
 
             # Calculate the first derivative
             first_derivative[k] = np.sum( np.array( deriv1_raw ), axis=0 )
@@ -859,107 +957,62 @@ class wavelet_eqn(eqn_problem):
             dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
 
             # Calculate the first derivative for the coefficient term
-            if cls.spatial_order<=2:
-                if verbosity>0:
-                    print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
-                    print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
-                deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
-            else:
-                import warnings
-                warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
-                deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+            if (k=="a") or ( cls.gradient_construction.lower()=="full" ):
+                if cls.spatial_order<=2:
+                    if verbosity>0:
+                        print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
+                        print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
+                    deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+                else:
+                    import warnings
+                    warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
+                    deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
 
             # Calculate the second derivative for the dilation term
-            if i==0:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
-            else:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
-            n = len(tilde_wavelet) + len(dec_wavelet) - 1
-            n_padded = 2**int(np.ceil(np.log2(n)))
-            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
-            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
-            f_domain = np.zeros( ( len(dx), n_padded ) )
-            k_domain = np.zeros( ( len(dx), n_padded ) )
-            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
             subgrid = np.zeros( ( len(dx), len(dx) ) )
             for jj in range( len(dx) ):
                 if verbosity>0:
                     print(f"jj={jj}")
-                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
                     if verbosity>1:
                         print(f"Edge found")
                 else:
-                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
-                    k_domain[jj] = f_domain[jj] # 2*np.pi
-                    F_subgrid[jj] = 1j * k_domain[jj] * F_tilde_wavelet * F_dec_wavelet
-                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
-                    if front_offset>0:
-                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
-                    else:
-                        filt_subgrid = np.real( raw_subgrid[::2] )
-                    start = max( 0, jj-len(filt_subgrid)//2 )
-                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
-                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
-                    if verbosity>1:
-                        print(f"\tFrequencies:\t{f_domain[jj]}")
-                        print(f"\tdx:\t{dx[jj]}")
-                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
-                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
-                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
-                        print(f"\tInserting into:\t{start}:{end}")
-                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
-                    subgrid[jj,start:end] = subgrid_insert
+                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
+                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
+                    if k.startswith("d") and ( cls.gradient_construction.lower() in ["full"] ):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
+                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
             deriv2_raw[1] = np.matmul( subgrid, np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ) )
             if storage_level>0:
                 cls.dilationSecondDeriv_raw[k+"_2ndDer"] = subgrid
 
             # Calculate the second derivative for the subgrid term
-            if i==0:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_lo
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_lo
-            else:
-                tilde_wavelet = pywt.Wavelet( cls.wavelet ).rec_hi
-                dec_wavelet = pywt.Wavelet( cls.wavelet ).dec_hi
-            n = len(tilde_wavelet) + len(dec_wavelet) - 1
-            n_padded = 2**int(np.ceil(np.log2(n)))
-            F_tilde_wavelet = np.fft.fft( tilde_wavelet, n=n_padded )
-            F_dec_wavelet = np.fft.fft( dec_wavelet, n=n_padded )
-            f_domain = np.zeros( ( len(dx), n_padded ) )
-            k_domain = np.zeros( ( len(dx), n_padded ) )
-            F_subgrid = np.zeros( ( len(dx), n_padded ) , dtype=complex)
             subgrid = np.zeros( ( len(dx), len(dx) ) )
             for jj in range( len(dx) ):
                 if verbosity>0:
                     print(f"jj={jj}")
-                if jj<(n_padded//4) or jj>(len(dx)-n_padded//4-1):
+                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
                     if verbosity>1:
                         print(f"Edge found")
                 else:
-                    f_domain[jj] = np.fft.fftfreq( n_padded ) / ( dx[jj] * n_padded )
-                    k_domain[jj] = f_domain[jj] # 2*np.pi
-                    F_subgrid[jj] = - ( k_domain[jj]**2 ) * F_tilde_wavelet * F_dec_wavelet
-                    raw_subgrid = np.fft.ifft( F_subgrid[jj] )
-                    if front_offset>0:
-                        filt_subgrid = np.real( raw_subgrid[front_offset:-front_offset:2] )
-                    else:
-                        filt_subgrid = np.real( raw_subgrid[::2] )
-                    start = max( 0, jj-len(filt_subgrid)//2 )
-                    end = min( len(dx), jj+len(filt_subgrid)//2+1 )
-                    subgrid_insert = filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)]
-                    if verbosity>1:
-                        print(f"\tFrequencies:\t{f_domain[jj]}")
-                        print(f"\tdx:\t{dx[jj]}")
-                        print(f"\tFiltered Subgrid:\t{filt_subgrid}")
-                        print(f"\tInserting from:\t{max(0,len(filt_subgrid)//2-jj)}:{len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)}")
-                        print(f"\t\tInsert from length:\t{len(filt_subgrid[max(0,len(filt_subgrid)//2-jj):len(filt_subgrid)+min(0,len(dx)-jj-1-len(filt_subgrid)//2)])}")
-                        print(f"\tInserting into:\t{start}:{end}")
-                        print(f"\t\tInsert into length:\t{len(subgrid[jj,start:end])}")
-                    subgrid[jj,start:end] = subgrid_insert
+                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
+                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
+                    if k.startswith("d"):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi''*psi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
+                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
+                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi''*phi"]
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
             deriv2_raw[-1] = np.matmul( subgrid, coefficients_atLevel )
             if storage_level>0:
                 cls.subgridSecondDeriv_raw[k+"_2ndDer"] = subgrid
+
+            # Filter NaN's
+            if not nan_value is None:
+                deriv2_raw = np.nan_to_num( np.array( deriv2_raw ), nan=nan_value )
 
             # Calculate the second derivative
             second_derivative[k] = np.sum( np.array( deriv2_raw ), axis=0 )
@@ -989,6 +1042,100 @@ class wavelet_eqn(eqn_problem):
             cls.coefficients[k][:1] = 0
             cls.coefficients[k][-2:] = 0
 
+    def derivative_reconstruction(cls ):
+        """
+            This method reconstructs the spatial derivatives back to the original domain using the
+        Inverse Discrete Wavelet Transform.
+
+        """
+        import pywt
+
+        # Set up reconstructed derivatives storage
+        cls.reconstructed_derivatives = []
+
+        # Calculate the reconstructed derivatives
+        for i in range( len( cls.derivatives ) ):
+            derivative_atLevel = cls.derivatives[i]
+            
+            if cls.N_levels>1:
+                coeffs = [ derivative_atLevel["a"] ]
+                for i in range( cls.N_levels ):
+                    coeffs += [ derivative_atLevel[f"d_l{i}"] ]
+                der = pywt.waverec( coeffs, "db2", mode=cls.signal_extension )
+            else:
+                der = pywt.idwt( derivative_atLevel["a"], derivative_atLevel["d"], "db2", mode=cls.signal_extension )
+
+            cls.reconstructed_derivatives += [ der ]
+
+    def flux_reconstruction(cls, domain_reconciliation="averaging" ):
+        """
+            This method produces the reconstruction of the flux term.
+
+        """
+        import pywt
+
+        #
+        # Loop through the levels to get the convective values
+        #
+        og_keys = list( cls.coefficients.keys() )
+        cls.convection = {}
+        cls.raw_convection = {}
+        if cls.N_levels>1:
+            cls.conv_d_coeffs = {}
+        for i, k in enumerate( og_keys ):
+            print(f"i={i}, key {k}")
+
+            if k=="a":
+                cls.raw_convection[k] = pywt.idwt( cls.coefficients[k], np.zeros_like( cls.coefficients[k] ), wavelet=cls.wavelet, mode=cls.signal_extension )
+            if k.startswith("d"):
+                if k=="d":
+                    cls.convection[k] = cls.convection["a"]
+                else:
+                    conv_d_coeffs = []
+                    for j in range( i+1 ):
+                        print("\tFound multilevel details")
+                        print(f"\tj={j}")
+                        if j==0:
+                            conv_d_coeffs += [ cls.coefficients["a"] ]
+                        elif j==i:
+                            conv_d_coeffs += [ np.zeros_like( cls.coefficients[k] ) ]
+                        else:
+                            conv_d_coeffs += [ cls.coefficients[f"d_l{j-1}"]]
+                    cls.conv_d_coeffs[k] = conv_d_coeffs
+                    cls.raw_convection[k] = pywt.waverec( conv_d_coeffs, cls.wavelet, mode=cls.signal_extension )
+                    convection_domain = cls.DWT_domain[i-1]
+
+            if not k=="d":
+
+                if domain_reconciliation.lower() in ["averaging", "average", "kernel"]:
+                    cls.convection[k] = np.zeros( 2* np.ceil( len( cls.raw_convection[k] )/4 ).astype(int) )
+                    for j in range( len( cls.convection[k] ) ):
+                        #print(f"\tj={j}")
+                        #print(f"\t\tUses indices:\t{2*j}:{2*(j+1)}")
+                        #print(f"\t\tKernel:\t{cls.raw_convection[k][2*j:2*(j+1)]}")
+                        if i>0:
+                            A = 2 ** ( -(cls.N_levels-i)/2 )
+                        else:
+                            A = 2 ** ( -(cls.N_levels-1)/2 )
+                        cls.convection[k][j]=np.mean(cls.raw_convection[k][2*j:2*(j+1)])*A
+
+                    # Filter NaNs
+                    cls.convection[k] = np.nan_to_num( cls.convection[k], nan=0 )
+            
+                elif domain_reconciliation.lower() in ["interpolation", "interpolate", "interp"]:
+                    print("Hello there, this does not work yet.")
+
+
+
+        #
+        # Loop through to find the convective rate
+        #
+        #cls.convective_rate = {}
+        #for i, k in enumerate( og_keys ):
+
+            #if k=="a":
+
+        
 
 class burgers_DWTeqn(wavelet_eqn):
     """
