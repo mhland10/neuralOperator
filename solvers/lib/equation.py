@@ -1040,7 +1040,7 @@ class wavelet_eqn(eqn_problem):
         #=============================================================
         for k in list( cls.coefficients.keys() ):
             cls.coefficients[k][:1] = 0
-            cls.coefficients[k][-2:] = 0
+            cls.coefficients[k][-1:] = 0
 
     def derivative_reconstruction(cls ):
         """
@@ -1067,7 +1067,7 @@ class wavelet_eqn(eqn_problem):
 
             cls.reconstructed_derivatives += [ der ]
 
-    def flux_reconstruction(cls, domain_reconciliation="averaging" ):
+    def flux_reconstruction(cls, domain_reconciliation="interpolation" ):
         """
             This method produces the reconstruction of the flux term.
 
@@ -1078,62 +1078,56 @@ class wavelet_eqn(eqn_problem):
         # Loop through the levels to get the convective values
         #
         og_keys = list( cls.coefficients.keys() )
-        cls.convection = {}
+        cls.convective_velocity = {}
         cls.raw_convection = {}
-        if cls.N_levels>1:
-            cls.conv_d_coeffs = {}
+        cls.conv_coeffs = {}
         for i, k in enumerate( og_keys ):
-            print(f"i={i}, key {k}")
+            #print(f"i={i}, key {k}")
 
-            if k=="a":
-                cls.raw_convection[k] = pywt.idwt( cls.coefficients[k], np.zeros_like( cls.coefficients[k] ), wavelet=cls.wavelet, mode=cls.signal_extension )
-            if k.startswith("d"):
-                if k=="d":
-                    cls.convection[k] = cls.convection["a"]
+            if cls.N_levels>1:
+                
+                cls.conv_coeffs[k] = []
+                for j, kk in enumerate( og_keys ):
+
+                    if j<i:
+                        cls.conv_coeffs[k] += [cls.coefficients[kk]]
+                    elif k=="a" and kk=="a":
+                        cls.conv_coeffs[k] += [cls.coefficients[kk]]
+                    else:
+                        cls.conv_coeffs[k] += [np.zeros_like(cls.coefficients[kk])]
+
+                cls.raw_convection[k] = pywt.waverec( cls.conv_coeffs[k], wavelet=cls.wavelet, mode=cls.signal_extension )
+
+            else:
+                
+                # Reconstruct the convective velocity 
+                cls.raw_convection[k] = pywt.idwt( cls.coefficients["a"], np.zeros_like( cls.coefficients["d"] ), wavelet=cls.wavelet, mode=cls.signal_extension )
+
+
+            if domain_reconciliation.lower() in ["averaging", "average", "kernel"]:
+                print("Averaging under construction")
+        
+            elif domain_reconciliation.lower() in ["interpolation", "interpolate", "interp"]:
+                
+                if k=="a":
+                    cls.convective_velocity[k] = np.interp( cls.DWT_domain[0], cls.x_domain, cls.raw_convection[k] )
                 else:
-                    conv_d_coeffs = []
-                    for j in range( i+1 ):
-                        print("\tFound multilevel details")
-                        print(f"\tj={j}")
-                        if j==0:
-                            conv_d_coeffs += [ cls.coefficients["a"] ]
-                        elif j==i:
-                            conv_d_coeffs += [ np.zeros_like( cls.coefficients[k] ) ]
-                        else:
-                            conv_d_coeffs += [ cls.coefficients[f"d_l{j-1}"]]
-                    cls.conv_d_coeffs[k] = conv_d_coeffs
-                    cls.raw_convection[k] = pywt.waverec( conv_d_coeffs, cls.wavelet, mode=cls.signal_extension )
-                    convection_domain = cls.DWT_domain[i-1]
-
-            if not k=="d":
-
-                if domain_reconciliation.lower() in ["averaging", "average", "kernel"]:
-                    cls.convection[k] = np.zeros( 2* np.ceil( len( cls.raw_convection[k] )/4 ).astype(int) )
-                    for j in range( len( cls.convection[k] ) ):
-                        #print(f"\tj={j}")
-                        #print(f"\t\tUses indices:\t{2*j}:{2*(j+1)}")
-                        #print(f"\t\tKernel:\t{cls.raw_convection[k][2*j:2*(j+1)]}")
-                        if i>0:
-                            A = 2 ** ( -(cls.N_levels-i)/2 )
-                        else:
-                            A = 2 ** ( -(cls.N_levels-1)/2 )
-                        cls.convection[k][j]=np.mean(cls.raw_convection[k][2*j:2*(j+1)])*A
-
-                    # Filter NaNs
-                    cls.convection[k] = np.nan_to_num( cls.convection[k], nan=0 )
-            
-                elif domain_reconciliation.lower() in ["interpolation", "interpolate", "interp"]:
-                    print("Hello there, this does not work yet.")
+                    cls.convective_velocity[k] = np.interp( cls.DWT_domain[i-1], cls.x_domain, cls.raw_convection[k] )
 
 
 
         #
         # Loop through to find the convective rate
         #
-        #cls.convective_rate = {}
-        #for i, k in enumerate( og_keys ):
+        #"""
+        cls.convection = {}
+        for i, k in enumerate( og_keys ):
 
-            #if k=="a":
+            if k=="a":
+                cls.convection[k] = cls.derivatives[0][k] * cls.convective_velocity[k]
+            else:
+                cls.convection[k] = cls.derivatives[0][k] * cls.convective_velocity[k]
+        #"""
 
         
 
