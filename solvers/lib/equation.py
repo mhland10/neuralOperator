@@ -885,7 +885,8 @@ class wavelet_eqn(eqn_problem):
                     if verbosity>0:
                         print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
                         print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
-                    deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+                    #deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
+                    deriv1_raw[0]=np.gradient( coefficients_atLevel, np.mean(dx[2:-2]), edge_order=cls.spatialBC_order )
                 else:
                     import warnings
                     warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
@@ -981,10 +982,10 @@ class wavelet_eqn(eqn_problem):
                     end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
                     if k.startswith("d") and ( cls.gradient_construction.lower() in ["full"] ):
                         subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj]*dx[jj])
                     elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
                         subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
+                        subgrid[jj,start:end] = subgrid_insert/(dx[jj]*dx[jj])
             deriv2_raw[1] = np.matmul( subgrid, np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ) )
             if storage_level>0:
                 cls.dilationSecondDeriv_raw[k+"_2ndDer"] = subgrid
@@ -1140,11 +1141,13 @@ class burgers_DWTeqn(wavelet_eqn):
         problem (burgers_DWTeqn)
     
     """
-    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", viscid=True, N_levels=1, wavelet="db2", signal_extension="zero" ):
+    def __init__(self, x, u_0, spatial_order=2, spatialBC_order=None, stepping="explicit", viscid=True, N_levels=1, wavelet="db2", signal_extension="zero" ):
         """
             Initialize the Burgers Equation problem.
 
         Args:
+            x (float, NumPy NDArray):   The spatial domain to perform the operation over.
+
             spatial_order (int, optional):  The theoretical order that the spatial gradient will be
                                                 calculated by, i.e. the number of points in the 
                                                 stencil. Defaults to 2.
@@ -1180,7 +1183,16 @@ class burgers_DWTeqn(wavelet_eqn):
             super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=1, N_levels=N_levels, wavelet=wavelet, signal_extension=signal_extension )
         self.viscid=viscid
 
-    def __call__(cls, x, u, coeffs, BCs, *args):
+        # Precompute the waveshapes
+        super().waveshape_precompute()
+
+        # Precompute the domain
+        super().domain_initialization( x )
+
+        # Initialize the wavelet decomposition
+        super().wavelet_initialization( u_0 )
+
+    def __call__(cls, coeffs, BCs, *args):
         """
             Set of Differential equations to solve the Burgers Equation.
 
@@ -1188,30 +1200,40 @@ class burgers_DWTeqn(wavelet_eqn):
 
         **Explicit methods**
 
-        <du/dt>=nu<d2u/dx2>-<u(interpolated)>o<du/dx>
+        <du/dt>=nu<d2u/dx2>-<F(u)>
+
+                =nu*<L>-<F>
 
         Where 
         - <du/dt> is the time derivative of the solution, which is the output
         - nu is the diffusion coefficient
         - <d2u/dx2> is the second spatial gradient/Laplace operator that will be projected into 
                     each wavelet basis space.
-        - <u(interpolated)> is the velocity interpolated onto the respective wavelet coefficient
-                            spatial domains.
-        - <du/dx> is the first spatial gradient/flux operator that will be projected into each 
-                    wavelet basis space.
+        - <F(u)> is the vector of flux in each wavelet basis space.
 
         Args:
             x (np.ndarray):         The spatial grid
 
-            u (np.ndarray):         The function of the Burgers Equation
+            u (np.ndarray):         The function of the Burgers Equation projected onto the wavelet
+                                    basis spaces.
 
             BC_x (np.ndarray):      The boundary conditions for the spatial grid
 
             BC_dx (np.ndarray):     The boundary conditions for the spatial derivative
+
+        Returns:
+            du_dt (np.ndarray):     The time step function of a single time step of the Burger's 
+                                    equation.
         
         """
 
         nu=coeffs[0]
+
+        # Calculate derivatives
+        super().derivatives()
+
+        # Calculate the flux values
+        super().flux_reconstruction()
 
         # Pull the boundary conditions
         BC_x = BCs[0]
@@ -1219,23 +1241,22 @@ class burgers_DWTeqn(wavelet_eqn):
         if cls.viscid:
             BC_dx2 = BCs[2]
 
-        # Call the parent class call method
-        if cls.viscid:
-            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx, BC_dx2=BC_dx2 )
-        else:
-            super().__call__(x, u, nu, BC_x=BC_x, BC_dx=BC_dx )
-
-        # Set up A-matrix - ie: 2nd derivative
+        # Set up L-arrays - ie: 2nd derivative
+        cls.L = {}
         if cls.viscid and not nu==0:
-            cls.A = nu * cls.gradient_matrices[1]
+            for k in list( cls.derivatives[1].keys() ):
+                cls.L[k] = nu * cls.derivatives[1][k]
 
-        # Set up B-matrix
-        cls.B = cls.gradient_matrices[0].todia()
-        cls.f = u*u/2
+        # Set up F-arrays
+        cls.F = {}
+        for k in list( cls.derivatives[0].keys() ):
+            cls.F[k] = cls.convection[k]
 
         # Sum to time derivative
-        du_dt = -cls.B.dot(cls.f) + cls.E.dot(cls.e)
-        if cls.viscid and not nu==0:
-            du_dt += -cls.A.dot(u)
+        du_dt = {}
+        for k in list( cls.L.keys() ):
+            du_dt[k] = -cls.F[k]
+            if cls.viscid and not nu==0:
+                du_dt[k] += cls.L[k]
 
         return du_dt
