@@ -660,10 +660,20 @@ class wavelet_eqn(eqn_problem):
         # Store gradient construction method
         self.gradient_construction = gradient_construction
 
-    def waveshape_precompute(cls ):
+    def waveshape_precompute(cls, diff_method="cd", enforce_real=True ):
         """
             This method precomputes the wavelet shapes, their derivatives, and their inner 
         products. This includes the DFT representation of the wavelet functions.
+
+        Args:
+            diff_method (str, optional):    The method to calculation the derivative of the 
+                                            wavelet. The valid options are:
+
+                                            "central difference", "central", "cd":
+                                                Use NumPy's gradient method.
+
+                                            "spectral", "fourier", or "frequency":
+                                                User spectral differencing.
 
         """
         import pywt
@@ -715,7 +725,7 @@ class wavelet_eqn(eqn_problem):
             cls.wavelet_shapes_DFT[k] = np.roll( np.fft.fft( cls.wavelet_shapes[f"{k}_padded"] ), n_padded//2 )
 
         # Initialize storage of corresponding wavenumbers
-        cls.wavelet_shapes_wavenumbers_normalized = np.pi * np.roll( np.fft.fftfreq( n_padded ), n_padded//2 )
+        cls.wavelet_shapes_wavenumbers_normalized = np.roll( np.fft.fftfreq( n_padded ), n_padded//2 )
 
         #=============================================================
         #
@@ -725,12 +735,27 @@ class wavelet_eqn(eqn_problem):
 
         # Initialize storage values
         cls.wavelet_shapes_deriv = {}
+        cls.wavelet_deriv_DFT = {}
 
         # Calculate the derivatives of the wavelet shapes
         for k in og_keys:
-            cls.wavelet_shapes_deriv[k] = np.gradient( cls.wavelet_shapes[f"{k}_padded"], edge_order=1 )
-            # TODO: Add in higher order derivatives as needed
-            cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.gradient( cls.wavelet_shapes_deriv[k], edge_order=1 )
+            if diff_method.lower() in ["central difference", "central", "cd"]:
+                cls.wavelet_shapes_deriv[k] = np.gradient( cls.wavelet_shapes[f"{k}_padded"], edge_order=1 )
+                # TODO: Add in higher order derivatives as needed
+                cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.gradient( cls.wavelet_shapes_deriv[k], edge_order=1 )
+            elif diff_method.lower() in ["spectral", "fourier", "frequency"]:
+                # First derivative
+                cls.wavelet_deriv_DFT[k] = 1j * cls.wavelet_shapes_wavenumbers_normalized * cls.wavelet_shapes_DFT[k]
+                cls.wavelet_shapes_deriv[k] = np.fft.ifft( cls.wavelet_deriv_DFT[k] )
+                
+                # Second derivative
+                cls.wavelet_deriv_DFT[f"{k}_2ndDeriv"] = 1j * cls.wavelet_shapes_wavenumbers_normalized * cls.wavelet_deriv_DFT[k]
+                cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.fft.ifft( cls.wavelet_deriv_DFT[f"{k}_2ndDeriv"] )
+
+        if diff_method.lower() in ["spectral", "fourier", "frequency"]:
+            if enforce_real:
+                for k in list( cls.wavelet_shapes_deriv.keys() ):
+                    cls.wavelet_shapes_deriv[k] = cls.wavelet_shapes_deriv[k].real
 
         #=============================================================
         #
@@ -744,13 +769,15 @@ class wavelet_eqn(eqn_problem):
 
         # Calculate the convolution of the derivatives of the wavelet shapes
         for k in ["phi", "psi"]:
-            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            #raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_rebuild"], cls.wavelet_shapes[f"{k}_decomp"], mode="valid" )
             cls.wavelet_shapes_deriv_convolution_raw[f"{k}'*{k}"] = raw_convolution
             cls.wavelet_shapes_deriv_convolution[f"{k}'*{k}"] = raw_convolution[::2]
 
         # Calculate the convolution of the 2nd derivatives of the wavelet shapes
         for k in ["phi", "psi"]:
-            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp_2ndDeriv"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            #raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp_2ndDeriv"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
+            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_rebuild_2ndDeriv"], cls.wavelet_shapes[f"{k}_decomp"], mode="valid" )
             cls.wavelet_shapes_deriv_convolution_raw[f"{k}''*{k}"] = raw_convolution
             cls.wavelet_shapes_deriv_convolution[f"{k}''*{k}"] = raw_convolution[::2]
 
@@ -1062,9 +1089,9 @@ class wavelet_eqn(eqn_problem):
                 coeffs = [ derivative_atLevel["a"] ]
                 for i in range( cls.N_levels ):
                     coeffs += [ derivative_atLevel[f"d_l{i}"] ]
-                der = pywt.waverec( coeffs, "db2", mode=cls.signal_extension )
+                der = pywt.waverec( coeffs, cls.wavelet, mode=cls.signal_extension )
             else:
-                der = pywt.idwt( derivative_atLevel["a"], derivative_atLevel["d"], "db2", mode=cls.signal_extension )
+                der = pywt.idwt( derivative_atLevel["a"], derivative_atLevel["d"], cls.wavelet, mode=cls.signal_extension )
 
             cls.reconstructed_derivatives += [ der ]
 
