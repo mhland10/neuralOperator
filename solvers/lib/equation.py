@@ -527,7 +527,7 @@ def samplesToCoeffsDWT( N_samples, N_levels, support, verbosity=0 ):
 
     return coeff_list
 
-def lineDomainDWT( domain, N_levels, support, verbosity=0 ):
+def lineDomainDWT( domain, N_levels, support, verbosity=0, Truncate_domain=True ):
     """
         This function converts a 1D domain into the equivalent domain represented by the DWT coefficients.
     
@@ -570,6 +570,30 @@ def lineDomainDWT( domain, N_levels, support, verbosity=0 ):
             if verbosity > 1:
                 print(f"\t\tDomain at coefficient {c}:\t{domain_at_coeff}")
 
+            if not Truncate_domain:
+                # Calculate the number of coefficients kept and dropped
+                number_kept = len(filtered_coeffs)
+                number_dropped = len(coeffs[l][c])-number_kept
+
+
+                if not number_dropped==0:
+                    # Figure out if this is the LHS or RHS
+                    LHS_truncate = any( x<0 for x in coeffs[l][c] )
+                    RHS_truncate = any( x>=domain.shape[0] for x in coeffs[l][c] )
+
+                    og_right_location = domain_at_coeff[-1]
+                    og_left_location = domain_at_coeff[0]
+                    centroid_location = np.mean( domain_at_coeff )
+                    dx = np.mean( np.gradient( domain_at_coeff ) )
+
+                    if LHS_truncate:
+                        left_location = og_left_location - dx * number_dropped
+                        domain_at_coeff = np.arange( left_location, og_right_location+dx, dx )
+
+                    elif RHS_truncate:
+                        right_location = og_right_location - dx * number_dropped
+                        domain_at_coeff = np.arange( og_left_location, right_location+dx, dx )
+                
             # Calculate the centroid for the domain at the coefficient
             DWT_domain_atLevel[c] = np.mean( domain_at_coeff )
 
@@ -659,6 +683,7 @@ class wavelet_eqn(eqn_problem):
 
         # Store gradient construction method
         self.gradient_construction = gradient_construction
+        self.max_derivative = max_derivative   
 
     def waveshape_precompute(cls, diff_method="cd", enforce_real=True ):
         """
@@ -703,7 +728,7 @@ class wavelet_eqn(eqn_problem):
 
         # Calculate the padded shapes
         n = len(cls.wavelet_shapes["phi_decomp"]) + len(cls.wavelet_shapes["phi_rebuild"]) - 1
-        n_padded = 2**int(np.ceil(np.log2(n)))
+        n_padded = 2**int(np.ceil(np.log2(n)))+2*(cls.max_derivative-1)
         cls.n_padded = n_padded
         n_diffference = n_padded - len(cls.wavelet_shapes["phi_decomp"])
         for k in og_keys:
@@ -932,9 +957,11 @@ class wavelet_eqn(eqn_problem):
                     end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
                     if k.startswith("d"):
                         subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
+                        #subgrid[jj,start:end] = (2**(i-1))*subgrid_insert/(dx[jj])
                         subgrid[jj,start:end] = subgrid_insert/(dx[jj])
                     elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
                         subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
+                        #subgrid[jj,start:end] = (2**(i-1))*subgrid_insert/(dx[jj])
                         subgrid[jj,start:end] = subgrid_insert/(dx[jj])
             deriv1_raw[1] = np.matmul( subgrid, coefficients_atLevel )
             if storage_level>0:
@@ -1054,21 +1081,111 @@ class wavelet_eqn(eqn_problem):
 
         #"""
 
-    def boundaryConditioning(cls ):
+    def boundaryConditioning(cls, u_BC=[None, None], du_BC=[None, None], d2u_BC=[None, None], derivative_order=None, storage_level=0 ):
         """
             This method alters the coefficients and allows for the boundary conditions to allow for
         boundary condition operation.
 
+        Args:
+            u_BC (list, optional):   The boundary conditions for the function u at the left and 
+                                        right boundaries, in the format: [u_LHS, u_RHS]. Defaults
+                                        to [None, None].
+
+            du_BC (list, optional):  The boundary conditions for the first derivative of u at the
+                                        left and right boundaries, in the format: [du_LHS, du_RHS].
+                                        Defaults to [None, None].
+
+            d2u_BC (list, optional): The boundary conditions for the second derivative of u at the
+                                        left and right boundaries, in the format: [d2u_LHS, 
+                                        d2u_RHS]. Defaults to [None, None].
+
+            derivative_order (int, optional): The order of the derivative to apply the BCs to. 
+                                                Defaults to None, which generates the BC operators
+                                                for the highest derivative order.
+
         """
+        # Import PyWavelets
+        import pywt
 
         #=============================================================
         #
         #   Set data coefficients to zero at BCs
         #
         #=============================================================
+        """
         for k in list( cls.coefficients.keys() ):
             cls.coefficients[k][:1] = 0
             cls.coefficients[k][-1:] = 0
+        """
+
+        #=============================================================
+        #
+        #   Precompute DWT BC operators
+        #
+        #=============================================================
+
+        #
+        # von Neumann BC operators
+        #
+        cls.vonNeumann_BC_operators = {}
+        u_LHS = np.zeros_like( cls.u[0] ) 
+        u_RHS = np.zeros_like( cls.u[0] )
+        u_LHS[0] = 1.0
+        u_RHS[-1] = 1.0
+        if cls.N_levels==1:
+            cls.vonNeumann_BC_operators["left"] = pywt.dwt( u_LHS, cls.wavelet, mode="zero" )
+            cls.vonNeumann_BC_operators["right"] = pywt.dwt( u_RHS, cls.wavelet, mode="zero" )
+        elif cls.N_levels>1:
+            cls.vonNeumann_BC_operators["left"] = pywt.wavedec( u_LHS, cls.wavelet, mode="zero", level=cls.N_levels )
+            cls.vonNeumann_BC_operators["right"] = pywt.wavedec( u_RHS, cls.wavelet, mode="zero", level=cls.N_levels )
+
+        # Find the maximum derivative order to apply BCs to
+        if derivative_order is None:
+            max_derivative_order = cls.max_derivative
+        elif du_BC.any() is not None:
+            max_derivative_order = 1
+        elif d2u_BC.any() is not None:
+            max_derivative_order = 2
+            
+        # Calculate the BC operators for each derivative order
+        grad_objs = []
+        cls.dirichlet_BC_ceoffs = {}
+        cls.dirichlet_BC_ceoffs["LHS"] = []
+        cls.dirichlet_BC_ceoffs["RHS"] = []
+        if derivative_order is None:
+            for der_order in range( 1, max_derivative_order+1 ):
+                gradient_obj = numericalGradient( der_order, [ np.ceil(max_derivative_order/2).astype(int), np.ceil(max_derivative_order/2).astype(int) ]  )
+                grad_objs += [ gradient_obj ]
+
+                # Calculate the BC operators
+                for i, k in enumerate( list( cls.coefficients.keys() ) ):
+                    BC_operator_LHS = grad_objs[-1].coeffs_LHS
+                    BC_operator_RHS = grad_objs[-1].coeffs_RHS
+                cls.dirichlet_BC_ceoffs["LHS"] += [ BC_operator_LHS ]
+                cls.dirichlet_BC_ceoffs["RHS"] += [ BC_operator_RHS ]
+
+        #
+        # Dirichlet BC operators
+        #
+        cls.dirichlet_BC_operators = []
+        for der_order in range( 1, max_derivative_order+1 ):
+            BC_operator = {}
+            BC_operator["left"] = []
+            BC_operator["right"] = []
+
+            du_LHS = np.zeros_like( cls.u[0] )
+            du_RHS = np.zeros_like( cls.u[0] )
+            du_LHS[:len( cls.dirichlet_BC_ceoffs["LHS"][der_order-1] )] = cls.dirichlet_BC_ceoffs["LHS"][der_order-1]
+            du_RHS[-len( cls.dirichlet_BC_ceoffs["RHS"][der_order-1] ):] = cls.dirichlet_BC_ceoffs["RHS"][der_order-1]
+
+            if cls.N_levels==1:
+                BC_operator["left"] = pywt.dwt( du_LHS, cls.wavelet, mode="zero" ) 
+                BC_operator["right"] = pywt.dwt( du_RHS, cls.wavelet, mode="zero" )
+            elif cls.N_levels>1:
+                BC_operator["left"] = pywt.wavedec( du_LHS, cls.wavelet, mode="zero", level=cls.N_levels ) 
+                BC_operator["right"] = pywt.wavedec( du_RHS, cls.wavelet, mode="zero", level=cls.N_levels )
+
+            cls.dirichlet_BC_operators += [ BC_operator ]
 
     def derivative_reconstruction(cls ):
         """
@@ -1157,7 +1274,28 @@ class wavelet_eqn(eqn_problem):
                 cls.convection[k] = cls.derivatives[0][k] * cls.convective_velocity[k]
         #"""
 
-        
+    def resampling(cls ):
+        """
+            This method resamples the wavelet coefficients to allow energy transfer between levels.
+
+        Returns:
+            _type_: _description_
+        """
+        import pywt
+
+        print("Under construction")
+
+        if cls.N_levels==1:
+            u_hold = pywt.idwt( cls.coefficients["a"], cls.coefficients["d"], cls.wavelet, mode=cls.signal_extension )
+            coeffs = pywt.dwt( u_hold, cls.wavelet, mode=cls.signal_extension )
+            cls.coefficients["a"] = coeffs[0]
+            cls.coefficients["d"] = coeffs[1]
+        elif cls.N_levels>1:
+            u_hold = pywt.waverec( [ cls.coefficients["a"] ] + [ cls.coefficients[f"d_l{i}"] for i in range(cls.N_levels) ], cls.wavelet, mode=cls.signal_extension )
+            coeffs = pywt.wavedec( u_hold, cls.wavelet, mode=cls.signal_extension, level=cls.N_levels )
+            cls.coefficients["a"] = coeffs[0]
+            for i in range( cls.N_levels ):
+                cls.coefficients[f"d_l{i}"] = coeffs[i+1]
 
 class burgers_DWTeqn(wavelet_eqn):
     """
