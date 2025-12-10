@@ -601,6 +601,115 @@ def lineDomainDWT( domain, N_levels, support, verbosity=0, Truncate_domain=True 
 
     return DWT_domain
 
+def rebuildMatrix_initialization( N_aCoeffs, N_dCoeffs, support, matrix_format="csr", verbosity=10 ):
+    """
+        This function initializes a reconstruction matrix for the DWT based on the number of 
+    incoming coefficients.
+
+    Args:
+        N_aCoeffs (int):    The number of incoming approximation coefficients.
+
+        N_dCoeffs (int):    The number of incoming detail coefficients.
+
+        support (int):      The support the wavelet requires.
+
+        matrix_format (string, optional):   The format the rebuildMatrix will come in. The valid
+                                            options are:
+
+                                            *"csr" or "row":    SciPy sparse CSR matrix
+
+                                            "dia" or "diagonal" or "banded": SciPy sparse diagonal
+                                                                                matrix
+
+    Returns:
+        rebuildMatrix (SciPy sparse matrix):    The matrix to use to rebuild the data or such.
+
+    """
+    # Import needed modules
+    if not matrix_format.lower() in  ["dense", "numpy"]:
+        import scipy.sparse as spsp
+
+    #
+    #   Implement the Number of values
+    #
+    N_approx_coeffs = N_aCoeffs
+    N_detail_coeffs = N_dCoeffs
+    N_coefficients = N_approx_coeffs + N_detail_coeffs 
+    N_dataPoints = ( 2* N_detail_coeffs - support + 1 )
+    N_extDataPoints = 2 * np.ceil( N_coefficients / 2 ).astype(int)
+    print(f"For {N_approx_coeffs} approximation and {N_detail_coeffs} detail coefficients,")
+    print(f"\tthere are {N_dataPoints} data points and {N_extDataPoints} extended data points.")
+    #N_extDataPoints = N_dataPoints
+    
+    #
+    #   Implement the rebuild matrix
+    #
+    if matrix_format.lower() in ["csr", "sparse row", "row", "compressed sparse row"]:
+        rebuildMatrix = spsp.csr_matrix((N_coefficients, N_extDataPoints))
+    
+    elif matrix_format.lower() in ["dia", "diagonal", "banded", "d"]:
+        rebuildMatrix = spsp.dia_matrix((N_coefficients, N_extDataPoints))
+    
+    elif matrix_format.lower() in ["dense", "numpy"]:
+        rebuildMatrix = np.zeros((N_coefficients, N_extDataPoints))
+
+    return rebuildMatrix
+
+def projecitonMatrix_initialization( N_aCoeffs, N_dCoeffs, support, matrix_format="csr", verbosity=10 ):
+    """
+        This function initializes a decomposition matrix for the DWT based on the number of 
+    incoming coefficients.
+
+    Args:
+        N_aCoeffs (int):    The number of incoming approximation coefficients.
+
+        N_dCoeffs (int):    The number of incoming detail coefficients.
+
+        support (int):      The support the wavelet requires.
+
+        matrix_format (string, optional):   The format the projectionMatrix will come in. The valid
+                                            options are:
+
+                                            *"csr" or "row":    SciPy sparse CSR matrix
+
+                                            "dia" or "diagonal" or "banded": SciPy sparse diagonal
+                                                                                matrix
+
+    Returns:
+        projectionMatrix (SciPy sparse matrix):    The matrix to use to decompose the data or such.
+
+    """
+    # Import needed modules
+    if not matrix_format.lower() in  ["dense", "numpy"]:
+        import scipy.sparse as spsp
+
+    #
+    #   Implement the Number of values
+    #
+    N_approx_coeffs = N_aCoeffs
+    N_detail_coeffs = N_dCoeffs
+    N_coefficients = N_approx_coeffs + N_detail_coeffs 
+    N_dataPoints = ( N_approx_coeffs + N_detail_coeffs - support + 1 )
+    N_extDataPoints = 2 * np.ceil( N_coefficients / 2 ).astype(int)
+    
+    #N_extDataPoints = N_dataPoints
+    
+    #
+    #   Implement the projection matrix
+    #
+    if matrix_format.lower() in ["csr", "sparse row", "row", "compressed sparse row"]:
+        projectionMatrix = spsp.csr_matrix((N_coefficients, N_extDataPoints))
+    
+    elif matrix_format.lower() in ["dia", "diagonal", "banded", "d"]:
+        projectionMatrix = spsp.dia_matrix((N_coefficients, N_extDataPoints))
+    
+    elif matrix_format.lower() in ["dense", "numpy"]:
+        projectionMatrix = np.zeros((N_coefficients, N_extDataPoints))
+
+    return projectionMatrix
+
+
+
 class wavelet_eqn(eqn_problem):
     """
         This object is the parent object for DWT-based equations.
@@ -735,6 +844,7 @@ class wavelet_eqn(eqn_problem):
             cls.wavelet_shapes[k] = np.array( cls.wavelet_shapes[k] )
             cls.wavelet_shapes[f"{k}_padded"] = np.zeros( n_padded )
             cls.wavelet_shapes[f"{k}_padded"][n_diffference//2:-n_diffference//2] = cls.wavelet_shapes[k]
+        cls.n_difference = n_diffference
 
         #=============================================================
         #
@@ -806,7 +916,264 @@ class wavelet_eqn(eqn_problem):
             cls.wavelet_shapes_deriv_convolution_raw[f"{k}''*{k}"] = raw_convolution
             cls.wavelet_shapes_deriv_convolution[f"{k}''*{k}"] = raw_convolution[::2]
 
-    def domain_initialization(cls, x_domain ):
+        #=============================================================
+        #
+        #   Precompute the detail derivative operator
+        #
+        #=============================================================
+
+        cls.deriv_kernels = []
+        for i in range( cls.max_derivative ):
+
+            if i==0:
+                cls.deriv_kernels += [{}]
+                cls.deriv_kernels[-1]["psi*psi"] = np.convolve(  cls.wavelet_shapes_deriv["psi_rebuild"], cls.wavelet_shapes["psi_decomp"] )[::2]
+                cls.deriv_kernels[-1]["phi*phi"] = np.convolve(  cls.wavelet_shapes_deriv["phi_rebuild"], cls.wavelet_shapes["phi_decomp"] )[::2]
+            if i==1:
+                cls.deriv_kernels += [{}]
+                cls.deriv_kernels[-1]["psi*psi"] = np.convolve(  cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], cls.wavelet_shapes["psi_decomp"] )[::2]
+                cls.deriv_kernels[-1]["phi*phi"] = np.convolve(  cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], cls.wavelet_shapes["phi_decomp"] )[::2]
+
+    def matrix_precompute(cls, verbosity=10 ):
+        """
+            This method precomputes the matrices that form the various kernels to calculate the
+        various operations in the data.
+
+        """
+        import scipy.sparse as spsp
+
+        #
+        #   Find how many coefficients are in each level
+        #
+        coefficient_stack = samplesToCoeffsDWT( len(cls.x_domain), cls.N_levels, cls.support )
+        cls.N_coeffs = [coefficient_stack[-1].shape[0]]
+        for i in range( cls.N_levels ):
+            cls.N_coeffs += [coefficient_stack[-(i+1)].shape[0]]
+        cls.N_coeffs = np.array( cls.N_coeffs )
+
+        #
+        #   Initialize the Galerkin matrices and fill out
+        #
+        cls.Galerkin_matrices = []
+        for k in range( cls.max_derivative ):
+            if verbosity>0:
+                print(f"**Derivative {k+1}**")
+
+            Galerkin_matrix_deriv = []
+            for i in range( len(cls.N_coeffs)-1 ):
+                if verbosity>0:
+                    print(f"i={i}")
+
+                # Number of approximation coefficients
+                if i==0:
+                    N_approx = cls.N_coeffs[i]
+                else:
+                    N_approx = Galerkin_matrix_deriv[-1].shape[1] #- cls.support + 1
+
+                # Number of detail coefficients
+                N_detail = cls.N_coeffs[i+1]
+
+                if verbosity>2:
+                    print(f"\tThere are {N_approx} approximation and {N_detail} detail coefficients")
+
+                # Initialize and store the matrix
+                #Galerkin_matrix_deriv += [rebuildMatrix_initialization( N_approx, N_detail, cls.support )]
+                 
+                if i<len(cls.N_coeffs)-2:
+                    N_data = cls.N_coeffs[i+2]
+                else:
+                    N_data = cls.u[0].shape[0]
+                Galerkin_matrix_deriv += [spsp.csr_matrix((N_approx+N_detail, N_data))]
+
+                #
+                #   Create upsample operator
+                #
+                #upsampler = np.ones(2) / np.sqrt(2)
+                upsampler = cls.wavelet_shapes["phi_rebuild"]
+
+                #
+                #   Calculate wave shifts
+                #
+                shift_padding = cls.n_difference//2
+                #shift_wave_leftWing = (cls.support-1)//2
+                shift_wave_leftWing = cls.support - 2   # We know this works
+                print(f"Shifting {shift_padding} for the padding and {shift_wave_leftWing} for the extension.")
+
+                # Column offset for the approximation
+                #col_offset_approx = min( 0, Galerkin_matrix_deriv[-1].shape)
+
+                N_extra = np.ceil((N_data - N_approx - N_detail)/2).astype(int)
+                #N_extra = 0
+                print(f"Extra Data Points: {N_extra}")
+
+                N_offset = 0
+                N_wave_offset = 2
+                #N_wave_offset = 2 - cls.N_levels
+
+                # Add in the approximation data
+                for j in range( N_approx ):
+                    # Galerkin approximation matrix portion
+                    if i==0:
+                        """ # Stable but wrong
+                        if k==0:
+                            
+                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild"] ) ) )
+                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_extra + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)
+                        elif k==1:
+                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"] ) ) )
+                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_extra + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)**2
+                        #"""
+                        #"""
+                        if k==0:
+                            
+                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild"] ) ) )
+                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)
+                        elif k==1:
+                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"] ) ) )
+                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)**2
+                        #"""
+                    # Rebuild approximation matrix portion
+                    else:
+                        """ # Stable but wrong
+                        Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes["phi_rebuild"] ) ) )
+                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_offset + N_wave_offset, axis=-1 )
+                        #"""
+                        """ # Also stable but also wrong, creates artifacts
+                        Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes["phi_rebuild"] ) ) )
+                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_wave_leftWing, axis=-1 )
+                        #"""
+                        Galerkin_matrix_deriv[-1][j] = np.append( upsampler, np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len(upsampler) ) )
+                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_wave_leftWing, axis=-1 )
+
+                #N_offset_detail = -np.mod( N_data//2 - N_detail, 2 )
+                N_offset_detail = 0
+                #N_offset_detail = N_data//2 - N_detail + 2
+                print(f"Detail offset: {N_offset_detail}")
+
+                # Add in the detail data
+                for j in range( N_detail ):
+                    # Calculate the row to place the data on
+                    row = j + N_approx
+
+                    """ # Stable but wrong
+                    if k==0:
+                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild"] ) ) )
+                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - cls.support + N_extra + N_offset_detail + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )
+                    elif k==1:
+                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"] ) ) )
+                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - cls.support + N_extra + N_offset_detail + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )**2
+                    #"""
+                    if k==0:
+                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild"] ) ) )
+                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )
+                    elif k==1:
+                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"] ) ) )
+                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - shift_padding - shift_wave_leftWing , axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )**2
+                # Reset the Galerkin matrix to a sparse matrix
+                Galerkin_matrix_deriv[-1].eliminate_zeros()
+
+            cls.Galerkin_matrices += [Galerkin_matrix_deriv]
+
+        #
+        #   Initialize the decomposition matrices and fill out
+        #
+        """
+        cls.decomposition_matrices = []
+        for i in range( len(cls.N_coeffs)-1 ):
+            if verbosity>0:
+                print(f"i={i}")
+
+            # Number of approximation coefficients
+            if i==0:
+                N_approx = cls.N_coeffs[i]
+            else:
+                N_approx = cls.decomposition_matrices[-1].shape[1] #- cls.support + 1 
+
+            # Number of detail coefficients
+            N_detail = cls.N_coeffs[i+1]
+
+            if verbosity>2:
+                print(f"\tThere are {N_approx} approximation and {N_detail} detail coefficients")
+
+            cls.decomposition_matrices += [np.zeros(5)]
+        #"""
+
+        #
+        #   Initialize the advection matrices and fill out
+        #
+        cls.advection_matrices = []
+        for i in range( len(cls.N_coeffs)-1 ):
+            if verbosity>0:
+                print(f"i={i}")
+
+            # Number of detail coefficients
+            N_detail = cls.N_coeffs[i+1]
+
+            if verbosity>2:
+                print(f"\tThere are {N_detail} detail coefficients")
+
+            # Initialize this level's advection matrix
+            cls.advection_matrices += [spsp.csr_matrix((N_detail,N_detail))]
+
+            # Fill in the matrix via central difference
+            for j in range( 1, N_detail-1 ):
+                #if verbosity>1:
+                    #print(f"\tj={j}")
+                cls.advection_matrices[-1][j,(j-1):(j+2)] = np.array([-1, 0, 1])/2
+
+            # Fill in the matrix for boundaries
+            cls.advection_matrices[-1][0,:2]=np.array([-1,1])
+            cls.advection_matrices[-1][-1,-2:]=np.array([-1,1])
+
+            # Divide by step size
+            cls.advection_matrices[-1] = cls.advection_matrices[-1] / ( cls.DWT_domain_steps[i][N_detail//2] )
+
+            # Filter out zeros
+            cls.advection_matrices[-1].eliminate_zeros()
+
+    def convection_compute(cls ):
+        """
+            This method calculates the convective velocity representation at each of the levels for
+        the DWT method.
+
+        """
+        # Import pywavelets
+        import pywt
+
+        # Initialize convective velocity
+        cls.convective_velocity = []
+
+        #
+        #   Calculate via Orthogonal Complement
+        #
+        for i in range( cls.N_levels ):
+            print(f"i={i}")
+
+            mult =  2 ** ( ( i - cls.N_levels+1 ) / 2 )
+
+            if i==0:
+                if cls.N_levels>1:
+                    print()
+                    cls.convective_velocity += [pywt.idwt( cls.coefficients["a"], np.zeros_like(cls.coefficients["d_l0"]), wavelet=cls.wavelet, mode=cls.signal_extension ) * mult]
+                else:
+                    cls.convective_velocity += [pywt.idwt( cls.coefficients["a"], np.zeros_like(cls.coefficients["d"]), wavelet=cls.wavelet, mode=cls.signal_extension )]
+            else:
+                coeffs_gather = [cls.coefficients["a"]]
+
+                for ii in range(i):
+                    coeffs_gather += [cls.coefficients[f"d_l{ii}"]]
+
+                coeffs_gather += [np.zeros_like(cls.coefficients[f"d_l{i}"])]
+
+                cls.convective_velocity += [pywt.waverec( coeffs_gather, wavelet=cls.wavelet, mode=cls.signal_extension ) * mult ]
+
+            # Correct length as needed
+            if i<(cls.N_levels-1):
+                if not len(cls.DWT_domain[i+1])==len(cls.convective_velocity[-1]):
+                    cls.convective_velocity[-1] = cls.convective_velocity[-1][1:]
+
+
+    def domain_initialization(cls, x_domain, spatialStep_treatment=None ):
         """
             This method takes the domain the wavelet equation is being solved on and initializes
         the domain that the wavelet coefficients are present on.
@@ -815,12 +1182,27 @@ class wavelet_eqn(eqn_problem):
             x_domain (numpy 1Darray - float): The spatial domain that the wavelet equation is being
                                                 solved on.
 
+            spatialStep_treatment (string, optional):   How to calculate the list of arrays of step
+                                                        sizes for the mesh.
+
         """
         # Store the original domain
         cls.x_domain = x_domain
         
         # Calculate and store the DWT domain
         cls.DWT_domain = lineDomainDWT( x_domain, cls.N_levels, cls.support )[::-1]
+
+        # Calculate the 
+        cls.DWT_domain_steps = []
+        for i in range( len( cls.DWT_domain ) ):
+            dxs = np.gradient( cls.DWT_domain[i] )
+
+            if spatialStep_treatment.lower() in ["uniform", "uni", "u"]:
+                cls.DWT_domain_steps += [ dxs[len(dxs)//2] * np.ones_like( cls.DWT_domain[i] ) ]
+
+            else:
+                cls.DWT_domain_steps += [ dxs ]
+            
 
     def wavelet_initialization(cls, u_0, storage_level=0 ):
         """
@@ -908,178 +1290,15 @@ class wavelet_eqn(eqn_problem):
         #
         #=============================================================
 
-        # Initialize storage value
-        if storage_level>0:
-            cls.firstDeriv_raw = {}
-            cls.subgridFirstDeriv_raw = {}
-
-        # Initialize the storage of the 1st derivative coefficients
-        first_derivative = {}
-        if storage_level>0:
-            cls.first_derivative = {}
-
-        for i, k in enumerate( list( cls.coefficients.keys() ) ):
-            if verbosity>0:
-                print(f"i={i}")
-            # Pull the coefficients at the level the key describes
-            coefficients_atLevel = cls.coefficients[k]
-            level_i = i-1
-            
-            # Initialize a numpy matrix that will hold the data for the 1st derivative calculation
-            deriv1_raw = np.zeros( ( 2, coefficients_atLevel.shape[0] ) )
-
-            # Calculate the spacing between values
-            dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
-
-            # Calculate the first derivative for the coefficient term
-            if (k=="a") or ( cls.gradient_construction.lower()=="full" ):
-                if cls.spatial_order<=2:
-                    if verbosity>0:
-                        print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
-                        print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
-                    #deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
-                    deriv1_raw[0]=np.gradient( coefficients_atLevel, np.mean(dx[2:-2]), edge_order=cls.spatialBC_order )
-                else:
-                    import warnings
-                    warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
-                    deriv1_raw[0]=np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )   
-
-            # Calculate the first derivative for the subgrid term
-            subgrid = np.zeros( ( len(dx), len(dx) ) )
-            for jj in range( len(dx) ):
-                if verbosity>0:
-                    print(f"jj={jj}")
-                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
-                    if verbosity>1:
-                        print(f"Edge found")
-                else:
-                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
-                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
-                    if k.startswith("d"):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
-                        #subgrid[jj,start:end] = (2**(i-1))*subgrid_insert/(dx[jj])
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
-                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
-                        #subgrid[jj,start:end] = (2**(i-1))*subgrid_insert/(dx[jj])
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
-            deriv1_raw[1] = np.matmul( subgrid, coefficients_atLevel )
-            if storage_level>0:
-                cls.subgridFirstDeriv_raw[k+"_1stDer"] = subgrid
-
-            # Filter NaN's
-            if not nan_value is None:
-                deriv1_raw = np.nan_to_num( np.array( deriv1_raw ).astype(np.float64), nan=nan_value )
-
-            # Calculate the first derivative
-            first_derivative[k] = np.sum( np.array( deriv1_raw ), axis=0 )
-            if storage_level>0:
-                cls.first_derivative[k] = first_derivative[k]
-
-            if storage_level>0:
-                cls.firstDeriv_raw[k+"_1stDer"] = deriv1_raw
-
-        cls.derivatives += [first_derivative]
+        
 
         #=============================================================
         #
         #   Calculate the 2nd Spatial Derivative
         #
         #=============================================================
-        #"""
-        # Initialize storage value
-        if storage_level>0:
-            cls.secondDeriv_raw = {}
-            cls.subgridSecondDeriv_raw = {}
-            cls.dilationSecondDeriv_raw = {}
+        
 
-        # Initialize the storage of the 2nd derivative coefficients
-        second_derivative = {}
-        if storage_level>0:
-            cls.second_derivative = {}
-
-        for i, k in enumerate( list( cls.coefficients.keys() ) ):
-            if verbosity>0:
-                print(f"i={i}")
-            # Pull the coefficients at the level the key describes
-            coefficients_atLevel = cls.coefficients[k]
-            level_i = i-1
-            
-            # Initialize a numpy matrix that will hold the data for the 2nd derivative calculation
-            deriv2_raw = np.zeros( ( 3, coefficients_atLevel.shape[0] ) )
-
-            # Calculate the spacing between values
-            dx = np.gradient( cls.DWT_domain[max(0,level_i)], edge_order=1 )
-
-            # Calculate the first derivative for the coefficient term
-            if (k=="a") or ( cls.gradient_construction.lower()=="full" ):
-                if cls.spatial_order<=2:
-                    if verbosity>0:
-                        print(f"Coefficients at the level:\t{coefficients_atLevel.shape}")
-                        print(f"DWT domain at the level {max(0,level_i)}:\t{cls.DWT_domain[max(0,level_i)].shape}")
-                    deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
-                else:
-                    import warnings
-                    warnings.warn("Wavelet equation object does not currently support orders >2, defaulting to Central Differencing", UserWarning)
-                    deriv2_raw[0]=np.gradient( np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ), cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order )
-
-            # Calculate the second derivative for the dilation term
-            subgrid = np.zeros( ( len(dx), len(dx) ) )
-            for jj in range( len(dx) ):
-                if verbosity>0:
-                    print(f"jj={jj}")
-                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
-                    if verbosity>1:
-                        print(f"Edge found")
-                else:
-                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
-                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
-                    if k.startswith("d") and ( cls.gradient_construction.lower() in ["full"] ):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi'*psi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj]*dx[jj])
-                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi'*phi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj]*dx[jj])
-            deriv2_raw[1] = np.matmul( subgrid, np.gradient( coefficients_atLevel, cls.DWT_domain[max(0,level_i)], edge_order=cls.spatialBC_order ) )
-            if storage_level>0:
-                cls.dilationSecondDeriv_raw[k+"_2ndDer"] = subgrid
-
-            # Calculate the second derivative for the subgrid term
-            subgrid = np.zeros( ( len(dx), len(dx) ) )
-            for jj in range( len(dx) ):
-                if verbosity>0:
-                    print(f"jj={jj}")
-                if jj<(cls.n_padded//4) or jj>(len(dx)-cls.n_padded//4-1):
-                    if verbosity>1:
-                        print(f"Edge found")
-                else:
-                    start = max( 0, jj-len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2 )
-                    end = min( len(dx), jj+len(cls.wavelet_shapes_deriv_convolution["psi'*psi"])//2+1 )
-                    if k.startswith("d"):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["psi''*psi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
-                    elif k.startswith("a") and ( cls.gradient_construction.lower() in ["modified", "full"] ):
-                        subgrid_insert = cls.wavelet_shapes_deriv_convolution["phi''*phi"]
-                        subgrid[jj,start:end] = subgrid_insert/(dx[jj])
-            deriv2_raw[-1] = np.matmul( subgrid, coefficients_atLevel )
-            if storage_level>0:
-                cls.subgridSecondDeriv_raw[k+"_2ndDer"] = subgrid
-
-            # Filter NaN's
-            if not nan_value is None:
-                deriv2_raw = np.nan_to_num( np.array( deriv2_raw ), nan=nan_value )
-
-            # Calculate the second derivative
-            second_derivative[k] = np.sum( np.array( deriv2_raw ), axis=0 )
-            if storage_level>0:
-                cls.second_derivative[k] = second_derivative[k]
-
-            if storage_level>0:
-                cls.secondDeriv_raw[k+"_2ndDer"] = deriv2_raw
-
-        cls.derivatives += [second_derivative]
-
-        #"""
 
     def boundaryConditioning(cls, u_BC=[None, None], du_BC=[None, None], d2u_BC=[None, None], derivative_order=None, storage_level=0 ):
         """
@@ -1187,10 +1406,14 @@ class wavelet_eqn(eqn_problem):
 
             cls.dirichlet_BC_operators += [ BC_operator ]
 
-    def derivative_reconstruction(cls ):
+    def derivative_reconstruction(cls, N_advectionLevels=0 ):
         """
-            This method reconstructs the spatial derivatives back to the original domain using the
-        Inverse Discrete Wavelet Transform.
+            This method reconstructs the spatial derivatives back to the original domain using 
+        the combination of Galerkin projection and advective flow.
+
+        Args:
+            N_advectionLevels (int, optional):  The number of levels that will use advection method
+                                                starting with the finest levels.
 
         """
         import pywt
@@ -1198,17 +1421,40 @@ class wavelet_eqn(eqn_problem):
         # Set up reconstructed derivatives storage
         cls.reconstructed_derivatives = []
 
+        # Correct for over advection levels
+        if N_advectionLevels>=cls.N_levels:
+            print("Warning: More advection levels selected than levels, minimizing for at least one approximate level.")
+            N_advectionLevels = min( N_advectionLevels, cls.N_levels-1 )
+
         # Calculate the reconstructed derivatives
-        for i in range( len( cls.derivatives ) ):
-            derivative_atLevel = cls.derivatives[i]
+        for i in range( cls.max_derivative ):
+
+            # Iterate over levels
+            for j in range( cls.N_levels - N_advectionLevels ):
             
-            if cls.N_levels>1:
-                coeffs = [ derivative_atLevel["a"] ]
-                for i in range( cls.N_levels ):
-                    coeffs += [ derivative_atLevel[f"d_l{i}"] ]
-                der = pywt.waverec( coeffs, cls.wavelet, mode=cls.signal_extension )
-            else:
-                der = pywt.idwt( derivative_atLevel["a"], derivative_atLevel["d"], cls.wavelet, mode=cls.signal_extension )
+                # Get approximation space
+                if j==0:
+                    approx = cls.coefficients["a"]
+                else:
+                    approx = der
+
+                if cls.N_levels>1:
+                    der = cls.Galerkin_matrices[i][j].T @ np.append( approx, cls.coefficients[f"d_l{j}"] )
+                else:
+                    der = cls.Galerkin_matrices[i][j].T @ np.append( approx, cls.coefficients["d"] )
+                    print(f"Calculated derivative {i}")
+
+            for j in range( N_advectionLevels ):
+                print(f"j={j}")
+
+                # Get approximation space 
+                approx = der
+
+                # Calculate the inverse DWT for the derivative
+                print(f"Approximation shape:\t{approx.shape}")
+                details = cls.coefficients[f"d_l{j+cls.N_levels-N_advectionLevels}"]
+                print(f"Detail Shape:\t{details.shape}")
+                der = pywt.idwt( approx, cls.coefficients[f"d_l{j+cls.N_levels-N_advectionLevels}"], wavelet=cls.wavelet, mode=cls.signal_extension  )
 
             cls.reconstructed_derivatives += [ der ]
 
