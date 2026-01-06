@@ -794,7 +794,7 @@ class wavelet_eqn(eqn_problem):
         self.gradient_construction = gradient_construction
         self.max_derivative = max_derivative   
 
-    def waveshape_precompute(cls, diff_method="cd", enforce_real=True ):
+    def waveshape_precompute(cls, diff_method="cd", derivative_order=None, enforce_real=True, small=1e-12 ):
         """
             This method precomputes the wavelet shapes, their derivatives, and their inner 
         products. This includes the DFT representation of the wavelet functions.
@@ -814,127 +814,185 @@ class wavelet_eqn(eqn_problem):
 
         #=============================================================
         #
-        #   Precompute the wavelet shapes
+        #   Pull the original wavelet shapes
         #
         #=============================================================
 
         # Initialize storage values
-        cls.wavelet_shapes = {}
+        cls.raw_wavelet_shapes = {}
 
         # Calculate the approximation function shape
-        cls.wavelet_shapes["phi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_lo
-        cls.wavelet_shapes["phi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_lo
+        cls.raw_wavelet_shapes["phi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_lo
+        cls.raw_wavelet_shapes["phi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_lo
 
         # Calculate the wavelet function shape
-        cls.wavelet_shapes["psi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_hi
-        cls.wavelet_shapes["psi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_hi
+        cls.raw_wavelet_shapes["psi_decomp"] = pywt.Wavelet( cls.wavelet ).dec_hi
+        cls.raw_wavelet_shapes["psi_rebuild"] = pywt.Wavelet( cls.wavelet ).rec_hi
 
-        cls.support = len( cls.wavelet_shapes["phi_decomp"] )
+        cls.support = len( cls.raw_wavelet_shapes["phi_decomp"] )
 
         # Store the original keys
-        og_keys = list( cls.wavelet_shapes.keys() )
+        og_keys = list( cls.raw_wavelet_shapes.keys() )
         cls.og_keys = og_keys
 
-        # Calculate the padded shapes
-        n = len(cls.wavelet_shapes["phi_decomp"]) + len(cls.wavelet_shapes["phi_rebuild"]) - 1
-        n_padded = 2**int(np.ceil(np.log2(n)))+2*(cls.max_derivative-1)
-        cls.n_padded = n_padded
-        n_diffference = n_padded - len(cls.wavelet_shapes["phi_decomp"])
-        for k in og_keys:
-            cls.wavelet_shapes[k] = np.array( cls.wavelet_shapes[k] )
-            cls.wavelet_shapes[f"{k}_padded"] = np.zeros( n_padded )
-            cls.wavelet_shapes[f"{k}_padded"][n_diffference//2:-n_diffference//2] = cls.wavelet_shapes[k]
-        cls.n_difference = n_diffference
-
         #=============================================================
         #
-        #   Precompute the wavelet shape DFT
+        #   Compute the padded wavelet shapes
         #
         #=============================================================
 
-        # Initialize storage values
-        cls.wavelet_shapes_DFT = {}
+        # Calculate size of the padded wavelet shape
+        N_padded = 2*cls.support + 2 * ( cls.max_derivative + 1 )
+        if diff_method.lower() in ["ts", "taylor series"]:
+                if derivative_order is None:
+                    N_padded += 2 * cls.max_derivative
+                else:
+                    N_padded += 2 * derivative_order
+        elif diff_method.lower() in ["spectral", "fourier"]:
+            N_padded += cls.support
 
-        # Calculate the DFT of the wavelet shapes from the padded shapes
-        for k in og_keys:
-            cls.wavelet_shapes_DFT[k] = np.roll( np.fft.fft( cls.wavelet_shapes[f"{k}_padded"] ), n_padded//2 )
+        # Insert the wavelets into the padding
+        cls.wavelet_shapes = {}
+        for k in cls.og_keys:
+            cls.wavelet_shapes[k] = np.array( [0]*((N_padded-cls.support)//2) + list(cls.raw_wavelet_shapes[k]) + [0]*((N_padded-cls.support)//2) )
 
-        # Initialize storage of corresponding wavenumbers
-        cls.wavelet_shapes_wavenumbers_normalized = np.roll( np.fft.fftfreq( n_padded ), n_padded//2 )
+        # Rotate to center function
+        for k in cls.og_keys:
+            cls.wavelet_shapes[k] = np.roll( cls.wavelet_shapes[k], N_padded//2 - np.argmax( np.abs( cls.wavelet_shapes[k] ) )-1 )
 
-        #=============================================================
-        #
-        #   Precompute the wavelet shape derivatives
-        #
-        #=============================================================
-
-        # Initialize storage values
-        cls.wavelet_shapes_deriv = {}
-        cls.wavelet_deriv_DFT = {}
-
-        # Calculate the derivatives of the wavelet shapes
-        for k in og_keys:
-            if diff_method.lower() in ["central difference", "central", "cd"]:
-                cls.wavelet_shapes_deriv[k] = np.gradient( cls.wavelet_shapes[f"{k}_padded"], edge_order=1 )
-                # TODO: Add in higher order derivatives as needed
-                cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.gradient( cls.wavelet_shapes_deriv[k], edge_order=1 )
-            elif diff_method.lower() in ["spectral", "fourier", "frequency"]:
-                # First derivative
-                cls.wavelet_deriv_DFT[k] = 1j * cls.wavelet_shapes_wavenumbers_normalized * cls.wavelet_shapes_DFT[k]
-                cls.wavelet_shapes_deriv[k] = np.fft.ifft( cls.wavelet_deriv_DFT[k] )
-                
-                # Second derivative
-                cls.wavelet_deriv_DFT[f"{k}_2ndDeriv"] = 1j * cls.wavelet_shapes_wavenumbers_normalized * cls.wavelet_deriv_DFT[k]
-                cls.wavelet_shapes_deriv[f"{k}_2ndDeriv"] = np.fft.ifft( cls.wavelet_deriv_DFT[f"{k}_2ndDeriv"] )
-
-        if diff_method.lower() in ["spectral", "fourier", "frequency"]:
-            if enforce_real:
-                for k in list( cls.wavelet_shapes_deriv.keys() ):
-                    cls.wavelet_shapes_deriv[k] = cls.wavelet_shapes_deriv[k].real
+        # Set index shift arrry
+        cls.indices = np.arange( N_padded ) - N_padded//2 + 1
 
         #=============================================================
         #
-        #   Precompute the wavelet shape derivatives' convolution
+        #   Compute the derivatives
         #
         #=============================================================
 
-        # Initialize storage values
-        cls.wavelet_shapes_deriv_convolution = {}
-        cls.wavelet_shapes_deriv_convolution_raw = {}
+        # Initialize the dictionary to hold the derivatives
+        cls.wavelet_derivatives = {}
 
-        # Calculate the convolution of the derivatives of the wavelet shapes
-        for k in ["phi", "psi"]:
-            #raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
-            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_rebuild"], cls.wavelet_shapes[f"{k}_decomp"], mode="valid" )
-            cls.wavelet_shapes_deriv_convolution_raw[f"{k}'*{k}"] = raw_convolution
-            cls.wavelet_shapes_deriv_convolution[f"{k}'*{k}"] = raw_convolution[::2]
+        #
+        #   Central differencing method
+        #
+        if diff_method.lower() in ["cd", "central difference", "numpy", "central differencing"]:
 
-        # Calculate the convolution of the 2nd derivatives of the wavelet shapes
-        for k in ["phi", "psi"]:
-            #raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_decomp_2ndDeriv"], cls.wavelet_shapes[f"{k}_rebuild"], mode="valid" )
-            raw_convolution = np.convolve( cls.wavelet_shapes_deriv[f"{k}_rebuild_2ndDeriv"], cls.wavelet_shapes[f"{k}_decomp"], mode="valid" )
-            cls.wavelet_shapes_deriv_convolution_raw[f"{k}''*{k}"] = raw_convolution
-            cls.wavelet_shapes_deriv_convolution[f"{k}''*{k}"] = raw_convolution[::2]
+            for k in cls.og_keys:
+                for i in range( cls.max_derivative ):
+                    
+                    if i==0:
+                        cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.gradient( cls.wavelet_shapes[k] )
+                    else:
+                        cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.gradient( cls.wavelet_derivatives[f"{k}_d{i}"] )
 
+        #
+        #   Taylor series approximation method
+        #
+        elif diff_method.lower() in ["ts", "taylor series"]:
+            
+            if derivative_order is None:
+                stencil_wings = np.ceil( cls.support/2 ).astype(int)
+            else:
+                stencil_wings = np.ceil( derivative_order/2 ).astype(int)
+
+            cls.gradient_matrix = []
+
+            for i in range( cls.max_derivative ):
+
+                numGrad = numericalGradient( i, (stencil_wings, stencil_wings ) )
+                numGrad.formMatrix( N_padded )
+                numGrad.gradientMatrix = numGrad.gradientMatrix.tocsr()
+                numGrad.gradientMatrix[np.abs(numGrad.gradientMatrix)<=small] = 0
+                cls.gradient_matrix += [numGrad.gradientMatrix]
+
+                # Correct for edges
+                for j in range( stencil_wings+1 ):
+                    print(f"j={j}")
+                    cls.gradient_matrix[i][j] = np.zeros_like( cls.gradient_matrix[i][j] )
+                    cls.gradient_matrix[i][-j] = np.zeros_like( cls.gradient_matrix[i][-j] )
+
+                for k in cls.og_keys:
+                    
+                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = numGrad.gradientMatrix @ cls.wavelet_shapes[k]
+
+
+        #
+        #   Spectral differencing method
+        #
+        elif diff_method.lower() in ["spectral", "fourier"]:
+
+            if derivative_order is None:
+                N_der = cls.support
+            else:
+                N_der = derivative_order
+
+            # Pull the spectral data
+            cls.wavelet_full_spectra = {}
+            cls.wavelet_spectra = {}
+
+            # Fill the spectral data
+            for k in cls.og_keys:
+                cls.wavelet_full_spectra[k] = np.fft.fft( cls.wavelet_shapes[k] )
+                cls.wavelet_spectra[k] = np.fft.fft( cls.wavelet_shapes[k], n=N_der )
+
+            # Roll the spectral data
+            for k in cls.og_keys:
+                #cls.wavelet_full_spectra[k] = np.roll( cls.wavelet_full_spectra[k], len(cls.wavelet_full_spectra[k])//2 )
+                #cls.wavelet_spectra[k] = np.roll( cls.wavelet_spectra[k], len(cls.wavelet_spectra[k])//2 )
+                cls.wavelet_full_spectra[k] = cls.wavelet_full_spectra[k]
+                cls.wavelet_spectra[k] = cls.wavelet_spectra[k]
+
+            # Find the wavenumbers for the spectra
+            #cls.full_wavenumbers = 2 * np.pi * np.roll( np.fft.fftfreq( N_padded ), N_padded//2 )
+            #cls.wavenumbers = 2 * np.pi * np.roll( np.fft.fftfreq( N_der ), N_der//2 )
+            cls.full_wavenumbers = np.pi * np.fft.fftfreq( N_padded ) 
+            cls.wavenumbers = np.pi * np.fft.fftfreq( N_der )
+            """
+                For those wondering why no 2\pi, remember that the waveshapes are dilated going
+            back into the layer the waveshape is acting upon.
+            """
+
+            # Calculate spectral differential representation
+            cls.wavelet_full_spectra_der = {}
+            cls.wavelet_spectra_der = {}
+            for i in range( cls.max_derivative ):
+                for k in cls.og_keys:
+
+                    cls.wavelet_full_spectra_der[f"{k}_d{i}"] = cls.wavelet_full_spectra[k] * ( 1j * cls.full_wavenumbers ) ** ( i+1 )
+                    cls.wavelet_spectra_der[f"{k}_d{i}"] = cls.wavelet_spectra[k] * ( 1j * cls.wavenumbers ) ** ( i+1 )
+
+            # Return back to Euclidean space
+            cls.wavelet_derivatives = {}
+            for i in range( cls.max_derivative ):
+                for k in cls.og_keys:
+
+                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] )
+
+        #
+        #   Catch invalid differencing methods
+        #
+        else:
+            raise ValueError("Invalid differencing method referenced")
+        
         #=============================================================
         #
-        #   Precompute the detail derivative operator
+        #   Calculate the derivative kernels
         #
         #=============================================================
 
-        cls.deriv_kernels = []
+        #
+        #   Calculate raw inner product kernel
+        #
+        cls.raw_convolutions = {}
         for i in range( cls.max_derivative ):
+            for k in cls.og_keys:
+                for kk in cls.og_keys:
 
-            if i==0:
-                cls.deriv_kernels += [{}]
-                cls.deriv_kernels[-1]["psi*psi"] = np.convolve(  cls.wavelet_shapes_deriv["psi_rebuild"], cls.wavelet_shapes["psi_decomp"] )[::2]
-                cls.deriv_kernels[-1]["phi*phi"] = np.convolve(  cls.wavelet_shapes_deriv["phi_rebuild"], cls.wavelet_shapes["phi_decomp"] )[::2]
-            if i==1:
-                cls.deriv_kernels += [{}]
-                cls.deriv_kernels[-1]["psi*psi"] = np.convolve(  cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], cls.wavelet_shapes["psi_decomp"] )[::2]
-                cls.deriv_kernels[-1]["phi*phi"] = np.convolve(  cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], cls.wavelet_shapes["phi_decomp"] )[::2]
+                    cls.raw_convolutions[f"{k}*{kk}_d{i+1}"] = np.convolve( cls.wavelet_derivatives[f"{k}_d{i+1}"], cls.wavelet_shapes[f"{kk}"], mode="full" )
 
-    def matrix_precompute(cls, verbosity=10 ):
+        
+
+    def matrix_precompute(cls, gradient_order=None, small=1e-12, verbosity=10 ):
         """
             This method precomputes the matrices that form the various kernels to calculate the
         various operations in the data.
@@ -951,185 +1009,112 @@ class wavelet_eqn(eqn_problem):
             cls.N_coeffs += [coefficient_stack[-(i+1)].shape[0]]
         cls.N_coeffs = np.array( cls.N_coeffs )
 
+        #=============================================================
         #
-        #   Initialize the Galerkin matrices and fill out
+        #   Calculate the raw derivative matrices
         #
-        cls.Galerkin_matrices = []
-        for k in range( cls.max_derivative ):
-            if verbosity>0:
-                print(f"**Derivative {k+1}**")
+        #=============================================================
+        cls.gradient_matrices = []
+        for i in range( cls.max_derivative ):
+            print(f"Calculating gradient matrix for derivative {i+1}...")
 
-            Galerkin_matrix_deriv = []
-            for i in range( len(cls.N_coeffs)-1 ):
-                if verbosity>0:
-                    print(f"i={i}")
-
-                # Number of approximation coefficients
-                if i==0:
-                    N_approx = cls.N_coeffs[i]
+            grad_matrices_xLevel = []
+            for j in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {j} with {cls.N_coeffs[j]} coefficients.")
+                
+                if gradient_order is None:
+                    numGrad = numericalGradient( i+1, ( cls.support//2, cls.support//2 ) )
+                    cls.spatial_order = cls.support
                 else:
-                    N_approx = Galerkin_matrix_deriv[-1].shape[1] #- cls.support + 1
+                    numGrad = numericalGradient( i+1, ( gradient_order//2, gradient_order//2 ) )
+                    cls.spatial_order = gradient_order
+                numGrad.formMatrix( cls.N_coeffs[j] )
+                numGrad.gradientMatrix = numGrad.gradientMatrix.tocsr()
+                numGrad.gradientMatrix[np.abs(numGrad.gradientMatrix)<=small] = 0
 
-                # Number of detail coefficients
-                N_detail = cls.N_coeffs[i+1]
+                grad_matrices_xLevel += [ numGrad.gradientMatrix.tocsr() ]
 
-                if verbosity>2:
-                    print(f"\tThere are {N_approx} approximation and {N_detail} detail coefficients")
+            cls.gradient_matrices += [ grad_matrices_xLevel ]
 
-                # Initialize and store the matrix
-                #Galerkin_matrix_deriv += [rebuildMatrix_initialization( N_approx, N_detail, cls.support )]
-                 
-                if i<len(cls.N_coeffs)-2:
-                    N_data = cls.N_coeffs[i+2]
-                else:
-                    N_data = cls.u[0].shape[0]
-                Galerkin_matrix_deriv += [spsp.csr_matrix((N_approx+N_detail, N_data))]
-
-                #
-                #   Create upsample operator
-                #
-                #upsampler = np.ones(2) / np.sqrt(2)
-                upsampler = cls.wavelet_shapes["phi_rebuild"]
-
-                #
-                #   Calculate wave shifts
-                #
-                shift_padding = cls.n_difference//2
-                #shift_wave_leftWing = (cls.support-1)//2
-                shift_wave_leftWing = cls.support - 2   # We know this works
-                print(f"Shifting {shift_padding} for the padding and {shift_wave_leftWing} for the extension.")
-
-                # Column offset for the approximation
-                #col_offset_approx = min( 0, Galerkin_matrix_deriv[-1].shape)
-
-                N_extra = np.ceil((N_data - N_approx - N_detail)/2).astype(int)
-                #N_extra = 0
-                print(f"Extra Data Points: {N_extra}")
-
-                N_offset = 0
-                N_wave_offset = 2
-                #N_wave_offset = 2 - cls.N_levels
-
-                # Add in the approximation data
-                for j in range( N_approx ):
-                    # Galerkin approximation matrix portion
-                    if i==0:
-                        """ # Stable but wrong
-                        if k==0:
-                            
-                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild"] ) ) )
-                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_extra + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)
-                        elif k==1:
-                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"] ) ) )
-                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_extra + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)**2
-                        #"""
-                        #"""
-                        if k==0:
-                            
-                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild"] ) ) )
-                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)
-                        elif k==1:
-                            Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes_deriv["phi_rebuild_2ndDeriv"] ) ) )
-                            Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_approx//2]/2)**2
-                        #"""
-                    # Rebuild approximation matrix portion
-                    else:
-                        """ # Stable but wrong
-                        Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes["phi_rebuild"] ) ) )
-                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - cls.support + N_offset + N_wave_offset, axis=-1 )
-                        #"""
-                        """ # Also stable but also wrong, creates artifacts
-                        Galerkin_matrix_deriv[-1][j] = np.append( cls.wavelet_shapes["phi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len( cls.wavelet_shapes["phi_rebuild"] ) ) )
-                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_wave_leftWing, axis=-1 )
-                        #"""
-                        Galerkin_matrix_deriv[-1][j] = np.append( upsampler, np.zeros( Galerkin_matrix_deriv[-1][j].shape[-1] - len(upsampler) ) )
-                        Galerkin_matrix_deriv[-1][j] = np.roll( Galerkin_matrix_deriv[-1][j].toarray(), 2*j - shift_wave_leftWing, axis=-1 )
-
-                #N_offset_detail = -np.mod( N_data//2 - N_detail, 2 )
-                N_offset_detail = 0
-                #N_offset_detail = N_data//2 - N_detail + 2
-                print(f"Detail offset: {N_offset_detail}")
-
-                # Add in the detail data
-                for j in range( N_detail ):
-                    # Calculate the row to place the data on
-                    row = j + N_approx
-
-                    """ # Stable but wrong
-                    if k==0:
-                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild"] ) ) )
-                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - cls.support + N_extra + N_offset_detail + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )
-                    elif k==1:
-                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"] ) ) )
-                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - cls.support + N_extra + N_offset_detail + N_offset, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )**2
-                    #"""
-                    if k==0:
-                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild"] ) ) )
-                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - shift_padding - shift_wave_leftWing, axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )
-                    elif k==1:
-                        Galerkin_matrix_deriv[-1][row] = np.append( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"], np.zeros( Galerkin_matrix_deriv[-1][row].shape[-1] - len( cls.wavelet_shapes_deriv["psi_rebuild_2ndDeriv"] ) ) )
-                        Galerkin_matrix_deriv[-1][row] = np.roll( Galerkin_matrix_deriv[-1][row].toarray(), 2*j - shift_padding - shift_wave_leftWing , axis=-1 ) / ( cls.DWT_domain_steps[i][N_detail//2]/2 )**2
-                # Reset the Galerkin matrix to a sparse matrix
-                Galerkin_matrix_deriv[-1].eliminate_zeros()
-
-            cls.Galerkin_matrices += [Galerkin_matrix_deriv]
-
-        #
-        #   Initialize the decomposition matrices and fill out
-        #
         """
-        cls.decomposition_matrices = []
-        for i in range( len(cls.N_coeffs)-1 ):
-            if verbosity>0:
-                print(f"i={i}")
+            The indices for the gradient matrices are:
 
-            # Number of approximation coefficients
-            if i==0:
-                N_approx = cls.N_coeffs[i]
-            else:
-                N_approx = cls.decomposition_matrices[-1].shape[1] #- cls.support + 1 
+        gradient_matrices[ derivative index ][ level index ]
 
-            # Number of detail coefficients
-            N_detail = cls.N_coeffs[i+1]
+        """
 
-            if verbosity>2:
-                print(f"\tThere are {N_approx} approximation and {N_detail} detail coefficients")
-
-            cls.decomposition_matrices += [np.zeros(5)]
-        #"""
-
+        #=============================================================
         #
-        #   Initialize the advection matrices and fill out
+        #   Calculate the Galerkin matrices
         #
-        cls.advection_matrices = []
-        for i in range( len(cls.N_coeffs)-1 ):
-            if verbosity>0:
-                print(f"i={i}")
+        #=============================================================
+        cls.Galerkin_matrices = []
+        for i in range( cls.max_derivative ):
+            print(f"Calculating Galerkin matrix for derivative {i+1}...")
 
-            # Number of detail coefficients
-            N_detail = cls.N_coeffs[i+1]
+            Galerkin_matrices_xLevel = []
+            for j in range( cls.N_levels ):
+                if verbosity > 0:
+                    print(f"\tLevel {j} with {cls.N_coeffs[j]} coefficients.")
+                
+                Galerkin_matrix = spsp.csr_matrix( (cls.N_coeffs[j]*2 + 1 - cls.support, cls.N_coeffs[j]) )
+                
+                for m in range( cls.N_coeffs[j]*2 + 1 - cls.support ):
 
-            if verbosity>2:
-                print(f"\tThere are {N_detail} detail coefficients")
+                    if m>=cls.N_coeffs[j]:
+                        Galerkin_matrix[m,:len(cls.wavelet_derivatives[f"psi_rebuild_d{i+1}"])] = cls.wavelet_derivatives[f"psi_rebuild_d{i+1}"]
+                    else:
+                        if j==0:
+                            Galerkin_matrix[m,:len(cls.wavelet_derivatives[f"phi_rebuild_d{i+1}"])] = cls.wavelet_derivatives[f"phi_rebuild_d{i+1}"]
+                        else:
+                            Galerkin_matrix[m,:len(cls.wavelet_shapes["phi_rebuild"])] = cls.wavelet_shapes["phi_rebuild"]
 
-            # Initialize this level's advection matrix
-            cls.advection_matrices += [spsp.csr_matrix((N_detail,N_detail))]
+                    Galerkin_matrix[m][np.abs(Galerkin_matrix[m])<=small] = 0   
+                    
+                    if m<cls.N_coeffs[j]:
+                        Galerkin_matrix[m] = np.roll( Galerkin_matrix[m].toarray(), cls.indices[0]+m )
+                    else:
+                        Galerkin_matrix[m] = np.roll( Galerkin_matrix[m].toarray(), cls.indices[0]+(m - cls.N_coeffs[j]) )
 
-            # Fill in the matrix via central difference
-            for j in range( 1, N_detail-1 ):
-                #if verbosity>1:
-                    #print(f"\tj={j}")
-                cls.advection_matrices[-1][j,(j-1):(j+2)] = np.array([-1, 0, 1])/2
+                Galerkin_matrices_xLevel += [ Galerkin_matrix ]
 
-            # Fill in the matrix for boundaries
-            cls.advection_matrices[-1][0,:2]=np.array([-1,1])
-            cls.advection_matrices[-1][-1,-2:]=np.array([-1,1])
+            cls.Galerkin_matrices += [ Galerkin_matrices_xLevel ]
 
-            # Divide by step size
-            cls.advection_matrices[-1] = cls.advection_matrices[-1] / ( cls.DWT_domain_steps[i][N_detail//2] )
+        #=============================================================
+        #
+        #   Calculate the Galerkin kernel matrices
+        #
+        #=============================================================
+        cls.GalerkinKernel_matrices = []
+        for i in range( cls.max_derivative ):
+            print(f"Calculating Galerkin kernel matrix for derivative {i+1}...")
 
-            # Filter out zeros
-            cls.advection_matrices[-1].eliminate_zeros()
+            GalerkinKernel_matrices_xLevel = []
+            for j in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {j} with {cls.N_coeffs[j]} coefficients.")
+                
+                GalerkinKernel_matrix = spsp.csr_matrix( (cls.N_coeffs[j], cls.N_coeffs[j]) )
+                
+                for m in range( cls.N_coeffs[j] ):
+
+                    if j==0:
+                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"phi_rebuild*phi_decomp_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_rebuild*phi_decomp_d{i+1}"][::2].real
+                    else:
+                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"psi_rebuild*psi_decomp_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_rebuild*psi_decomp_d{i+1}"][::2].real
+                    GalerkinKernel_matrix[m][np.abs(GalerkinKernel_matrix[m])<=small] = 0
+                    GalerkinKernel_matrix[m] = np.roll( GalerkinKernel_matrix[m].toarray(), cls.indices[0]+m )
+
+                GalerkinKernel_matrices_xLevel += [ GalerkinKernel_matrix ]
+
+            cls.GalerkinKernel_matrices += [ GalerkinKernel_matrices_xLevel ]
+
+        #=============================================================
+        #
+        #   Calculate the transfer kernel matrices
+        #
+        #=============================================================
 
     def convection_compute(cls ):
         """
@@ -1192,16 +1177,20 @@ class wavelet_eqn(eqn_problem):
         # Calculate and store the DWT domain
         cls.DWT_domain = lineDomainDWT( x_domain, cls.N_levels, cls.support )[::-1]
 
-        # Calculate the 
+        #=============================================================
+        #
+        # Calculate the domain step size
+        #
+        #=============================================================
         cls.DWT_domain_steps = []
-        for i in range( len( cls.DWT_domain ) ):
-            dxs = np.gradient( cls.DWT_domain[i] )
+        if spatialStep_treatment is None or spatialStep_treatment.lower() in ["u", "uniform"]:
+            
+            dx_base = np.mean( np.gradient( x_domain ) )
+            cls.DWT_domain_steps = [ dx_base ]
+            cls.DWT_domain_steps += [ dx_base * ( 2 ** (i+1) ) for i in range( cls.N_levels ) ]
+            
 
-            if spatialStep_treatment.lower() in ["uniform", "uni", "u"]:
-                cls.DWT_domain_steps += [ dxs[len(dxs)//2] * np.ones_like( cls.DWT_domain[i] ) ]
-
-            else:
-                cls.DWT_domain_steps += [ dxs ]
+        
             
 
     def wavelet_initialization(cls, u_0, storage_level=0 ):
