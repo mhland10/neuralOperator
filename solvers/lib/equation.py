@@ -1033,7 +1033,10 @@ class wavelet_eqn(eqn_problem):
                 numGrad.gradientMatrix = numGrad.gradientMatrix.tocsr()
                 numGrad.gradientMatrix[np.abs(numGrad.gradientMatrix)<=small] = 0
 
-                grad_matrices_xLevel += [ numGrad.gradientMatrix.tocsr() ]
+                holding = numGrad.gradientMatrix.tocsr()
+                holding.eliminate_zeros()
+
+                grad_matrices_xLevel += [ holding ]
 
             cls.gradient_matrices += [ grad_matrices_xLevel ]
 
@@ -1077,6 +1080,9 @@ class wavelet_eqn(eqn_problem):
                     else:
                         Galerkin_matrix[m] = np.roll( Galerkin_matrix[m].toarray(), cls.indices[0]+(m - cls.N_coeffs[j]) )
 
+                Galerkin_matrix[np.abs(Galerkin_matrix)<=small] = 0 
+                Galerkin_matrix.eliminate_zeros()
+
                 Galerkin_matrices_xLevel += [ Galerkin_matrix ]
 
             cls.Galerkin_matrices += [ Galerkin_matrices_xLevel ]
@@ -1100,11 +1106,14 @@ class wavelet_eqn(eqn_problem):
                 for m in range( cls.N_coeffs[j] ):
 
                     if j==0:
-                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"phi_rebuild*phi_decomp_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_rebuild*phi_decomp_d{i+1}"][::2].real
+                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
                     else:
-                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"psi_rebuild*psi_decomp_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_rebuild*psi_decomp_d{i+1}"][::2].real
-                    GalerkinKernel_matrix[m][np.abs(GalerkinKernel_matrix[m])<=small] = 0
+                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real
+
                     GalerkinKernel_matrix[m] = np.roll( GalerkinKernel_matrix[m].toarray(), cls.indices[0]+m )
+
+                GalerkinKernel_matrix[np.abs(GalerkinKernel_matrix)<=small] = 0
+                GalerkinKernel_matrix.eliminate_zeros()
 
                 GalerkinKernel_matrices_xLevel += [ GalerkinKernel_matrix ]
 
@@ -1115,6 +1124,37 @@ class wavelet_eqn(eqn_problem):
         #   Calculate the transfer kernel matrices
         #
         #=============================================================
+        cls.transferKernel_matrices = []
+        for i in range( cls.max_derivative ):
+            print(f"Calculating transfer kernel matrix for derivative {i+1}...")
+
+            transferKernel_matrices_xLevel = []
+            for j in range( cls.N_levels ):
+                if verbosity > 0:
+                    print(f"\tLevel {j} with {cls.N_coeffs[j]} coefficients.")
+                
+                transferKernel_matrices = {}
+                transferKernel_matrices[f"phi*psi_d{i+1}"] = spsp.csr_matrix( (cls.N_coeffs[j+1], cls.N_coeffs[j+1]) )
+                transferKernel_matrices[f"psi*phi_d{i+1}"] = spsp.csr_matrix( (cls.N_coeffs[j+1], cls.N_coeffs[j+1]) )
+                
+                for m in range( cls.N_coeffs[j+1] ):
+
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m,:len(cls.raw_convolutions[f"phi_decomp*psi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_decomp*psi_rebuild_d{i+1}"][::2].real
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"phi*psi_d{i+1}"][m].toarray(), cls.indices[0]+m )
+                    
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m,:len(cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"psi*phi_d{i+1}"][m].toarray(), cls.indices[0]+m )
+
+                transferKernel_matrices[f"phi*psi_d{i+1}"][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"])<=small] = 0
+                transferKernel_matrices[f"psi*phi_d{i+1}"][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"])<=small] = 0
+                transferKernel_matrices[f"phi*psi_d{i+1}"].eliminate_zeros()
+                transferKernel_matrices[f"psi*phi_d{i+1}"].eliminate_zeros()
+
+                transferKernel_matrices_xLevel += [ transferKernel_matrices ]
+
+            cls.transferKernel_matrices += [ transferKernel_matrices_xLevel ]
 
     def convection_compute(cls ):
         """
@@ -1272,20 +1312,53 @@ class wavelet_eqn(eqn_problem):
 
         # Initialize the list that stores the derivatives
         cls.derivatives = []
+        cls.raw_derivatives = []
 
-        #=============================================================
-        #
-        #   Calculate the 1st Spatial Derivative
-        #
-        #=============================================================
+        for der_order in np.arange( cls.max_derivative )+1:
+            if verbosity > 0:
+                print(f"Calculating derivative of order {der_order}...")
 
-        
+            der_set = {}
 
-        #=============================================================
-        #
-        #   Calculate the 2nd Spatial Derivative
-        #
-        #=============================================================
+            #=============================================================
+            #
+            #   Calculate the derivative for non-localized data
+            #
+            #=============================================================
+
+            der_set["Taylor"] = []
+
+            for i in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {i} with {cls.N_coeffs[i]} coefficients.")
+
+                # Pull the gradient matrix
+                gradient_matrix = cls.gradient_matrices[der_order-1][i]
+
+                # Calculate the derivative coefficients
+                der_coeffs = gradient_matrix @ cls.coefficients["a"] if i==0 else gradient_matrix @ cls.coefficients[f"d_l{i-1}"]
+
+                der_set["Taylor"] += [ der_coeffs ]
+
+
+
+            #=============================================================  
+            #
+            #   Calculate the derivative for Galerkin data
+            #
+            #=============================================================
+
+
+
+            #=============================================================
+            #
+            #   Calculate the derivative for transfered data
+            #
+            #=============================================================
+
+            
+
+    
         
 
 
