@@ -64,7 +64,32 @@ def factorial( x ):
 
     return y
 
+def combinedDerivativeCoefficients( nOrderDerivative ):
+    """
+        This function calculates the coefficients for a combined derivative calculation for a given
+    order of derivative.
 
+    Args:
+        nOrderDerivative (int): _description_
+
+    Returns:
+        _type_: _description_
+
+    """
+
+    coefficients = []
+    for k in np.arange( nOrderDerivative ) + 1:
+        
+        if k==1:
+            coeffs_k = np.array([ 1, 1 ])
+        else:
+            coeffs_k = np.ones( k + 1 )
+            for j in np.arange( k-1 )+1:
+                coeffs_k[j] = coefficients[-1][j-1] + coefficients[-1][j]
+        
+        coefficients.append( coeffs_k )
+
+    return coefficients
 
 ###################################################################################################
 #

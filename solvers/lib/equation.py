@@ -655,7 +655,7 @@ def rebuildMatrix_initialization( N_aCoeffs, N_dCoeffs, support, matrix_format="
 
     return rebuildMatrix
 
-def projecitonMatrix_initialization( N_aCoeffs, N_dCoeffs, support, matrix_format="csr", verbosity=10 ):
+def projectionMatrix_initialization( N_aCoeffs, N_dCoeffs, support, matrix_format="csr", verbosity=10 ):
     """
         This function initializes a decomposition matrix for the DWT based on the number of 
     incoming coefficients.
@@ -945,12 +945,26 @@ class wavelet_eqn(eqn_problem):
             # Find the wavenumbers for the spectra
             #cls.full_wavenumbers = 2 * np.pi * np.roll( np.fft.fftfreq( N_padded ), N_padded//2 )
             #cls.wavenumbers = 2 * np.pi * np.roll( np.fft.fftfreq( N_der ), N_der//2 )
-            cls.full_wavenumbers = np.pi * np.fft.fftfreq( N_padded ) 
-            cls.wavenumbers = np.pi * np.fft.fftfreq( N_der )
+            cls.full_wavenumbers = 2* np.pi * np.fft.fftfreq( N_padded ) 
+            cls.wavenumbers = 2* np.pi * np.fft.fftfreq( N_der )
             """
-                For those wondering why no 2\pi, remember that the waveshapes are dilated going
-            back into the layer the waveshape is acting upon.
+            TODO: The spectral scheme needs to renormalize at some point
+            
             """
+
+            # Find the energy in the spectra
+            cls.full_energy_spectra = {}
+            cls.energy_spectra = {}
+            for k in cls.og_keys:
+                cls.full_energy_spectra[k] = np.abs( cls.wavelet_full_spectra[k] ) ** 2
+                cls.energy_spectra[k] = np.abs( cls.wavelet_spectra[k] ) ** 2
+
+            # Find the amount of energy stored in the waves
+            cls.Ls_full = {}
+            cls.Ls = {}
+            for k in cls.og_keys:
+                cls.Ls_full[k] = np.trapz( cls.full_energy_spectra[k], cls.full_wavenumbers ) / ( 2 * np.pi )
+                cls.Ls[k] = np.trapz( cls.energy_spectra[k], cls.wavenumbers ) / ( 2 * np.pi )
 
             # Calculate spectral differential representation
             cls.wavelet_full_spectra_der = {}
@@ -966,7 +980,8 @@ class wavelet_eqn(eqn_problem):
             for i in range( cls.max_derivative ):
                 for k in cls.og_keys:
 
-                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] )
+                    #cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] ) / ( cls.Ls_full[k] ** (i+1) )
+                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] ) #* ( (-1)**(i+1) )
 
         #
         #   Catch invalid differencing methods
@@ -991,8 +1006,7 @@ class wavelet_eqn(eqn_problem):
                     cls.raw_convolutions[f"{k}*{kk}_d{i+1}"] = np.convolve( cls.wavelet_derivatives[f"{k}_d{i+1}"], cls.wavelet_shapes[f"{kk}"], mode="full" )
 
         
-
-    def matrix_precompute(cls, gradient_order=None, small=1e-12, verbosity=10 ):
+    def matrix_precompute(cls, gradient_order=None, transfer_phaseShift=True, small=1e-12, verbosity=10 ):
         """
             This method precomputes the matrices that form the various kernels to calculate the
         various operations in the data.
@@ -1106,9 +1120,11 @@ class wavelet_eqn(eqn_problem):
                 for m in range( cls.N_coeffs[j] ):
 
                     if j==0:
-                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
+                        insertion = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
+                        GalerkinKernel_matrix[m,:len(insertion)] = insertion
                     else:
-                        GalerkinKernel_matrix[m,:len(cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real
+                        insertion = cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real
+                        GalerkinKernel_matrix[m,:len(insertion)] = insertion
 
                     GalerkinKernel_matrix[m] = np.roll( GalerkinKernel_matrix[m].toarray(), cls.indices[0]+m )
 
@@ -1139,13 +1155,22 @@ class wavelet_eqn(eqn_problem):
                 
                 for m in range( cls.N_coeffs[j+1] ):
 
-                    transferKernel_matrices[f"phi*psi_d{i+1}"][m,:len(cls.raw_convolutions[f"phi_decomp*psi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"phi_decomp*psi_rebuild_d{i+1}"][::2].real
-                    transferKernel_matrices[f"phi*psi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
-                    transferKernel_matrices[f"phi*psi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"phi*psi_d{i+1}"][m].toarray(), cls.indices[0]+m )
+                    cls.phaseShift_indices = 0
+                    if transfer_phaseShift:
+                        peak_split = np.argmax( np.abs( cls.raw_wavelet_shapes["psi_decomp"] ) ) - np.argmax( np.abs( cls.raw_wavelet_shapes["phi_decomp"] ) )
+                        cls.phaseShift_indices = (peak_split + cls.support)-1
                     
-                    transferKernel_matrices[f"psi*phi_d{i+1}"][m,:len(cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real)] = cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real
+                    # Transfer in from the coarser space to the finer space
+                    insertion = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m,:len(insertion)] = insertion
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"phi*psi_d{i+1}"][m].toarray(), cls.indices[0]+m+cls.phaseShift_indices )
+                    
+                    # Trasfer in from the finer space to the coarser space
+                    insertion = cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m,:len(insertion)] = insertion
                     transferKernel_matrices[f"psi*phi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
-                    transferKernel_matrices[f"psi*phi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"psi*phi_d{i+1}"][m].toarray(), cls.indices[0]+m )
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"psi*phi_d{i+1}"][m].toarray(), cls.indices[0]+m-cls.phaseShift_indices )
 
                 transferKernel_matrices[f"phi*psi_d{i+1}"][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"])<=small] = 0
                 transferKernel_matrices[f"psi*phi_d{i+1}"][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"])<=small] = 0
@@ -1155,6 +1180,46 @@ class wavelet_eqn(eqn_problem):
                 transferKernel_matrices_xLevel += [ transferKernel_matrices ]
 
             cls.transferKernel_matrices += [ transferKernel_matrices_xLevel ]
+
+        #=============================================================
+        #
+        #   Calculate the reconstruction matrices
+        #
+        #=============================================================
+        """
+            The reconstruction matrix takes the following form:
+
+        a_{j+1} = R_j * ( a_j or d_j )
+
+        """
+        cls.reconstruction_matrices = []
+        for j in range( cls.N_levels+1 ):
+            if verbosity > 0:
+                print(f"Calculating reconstruction matrix for level {j} with {cls.N_coeffs[j]} coefficients.")
+            
+            N_next = cls.N_coeffs[j]*2 + 1 - cls.support
+            if np.mod( cls.N_coeffs[j], 2 )==1:
+                N_next += 1
+            reconstruction_matrix = spsp.csr_matrix( ( N_next, cls.N_coeffs[j]*2 + 1 - cls.support ) )
+            
+            for m in range( 2*cls.N_coeffs[j] + 1 - cls.support ):
+
+                if m>=cls.N_coeffs[j]:
+                    reconstruction_matrix[m,:len(cls.wavelet_shapes["psi_rebuild"])] = cls.wavelet_shapes["psi_rebuild"]
+                else:
+                    if j==0:
+                        reconstruction_matrix[m,:len(cls.wavelet_shapes["phi_rebuild"])] = cls.wavelet_shapes["phi_rebuild"]
+                    else:
+                        reconstruction_matrix[m,:len(cls.wavelet_shapes["phi_rebuild"])] = cls.wavelet_shapes["phi_rebuild"]
+
+                reconstruction_matrix[m][np.abs(reconstruction_matrix[m])<=small] = 0   
+                
+                reconstruction_matrix[m] = np.roll( reconstruction_matrix[m].toarray(), cls.indices[0]+2*m )
+
+            reconstruction_matrix[np.abs(reconstruction_matrix)<=small] = 0 
+            reconstruction_matrix.eliminate_zeros()
+
+            cls.reconstruction_matrices += [ reconstruction_matrix ]
 
     def convection_compute(cls ):
         """
@@ -1230,9 +1295,6 @@ class wavelet_eqn(eqn_problem):
             cls.DWT_domain_steps += [ dx_base * ( 2 ** (i+1) ) for i in range( cls.N_levels ) ]
             
 
-        
-            
-
     def wavelet_initialization(cls, u_0, storage_level=0 ):
         """
             This method takes the initial condition and converts it to the wavelet coefficients.
@@ -1296,7 +1358,7 @@ class wavelet_eqn(eqn_problem):
 
         """
 
-    def derivatives(cls, storage_level=0, verbosity=0, nan_value=0 ):
+    def derivatives(cls, storage_level=0, verbosity=0, nan_value=0, store_matrices=True, small=1e-12 ):
         """
             This method calculates the spatial derivatives via the DWT projection method
 
@@ -1307,18 +1369,30 @@ class wavelet_eqn(eqn_problem):
 
             nan_value (float, optional): The value to use for NaN values. Defaults to 0.
 
+            store_matrices (bool, optional):    Whether to store the matrices used to calculate the
+                                                derivative components. Defaults to True, maybe I 
+                                                should change that.
+
+            small (float, optional):    The cutoff value for data to be set to zero. Helps with
+                                        sparsifying the data.
+
         """
+        # Import needed moduls
         import pywt
+        import scipy.sparse as spsp
 
         # Initialize the list that stores the derivatives
-        cls.derivatives = []
+        cls.derivatives_set = []
         cls.raw_derivatives = []
+        if store_matrices:
+            cls.derivative_matrices = []
 
         for der_order in np.arange( cls.max_derivative )+1:
             if verbosity > 0:
                 print(f"Calculating derivative of order {der_order}...")
 
             der_set = {}
+            der_matrices = {}
 
             #=============================================================
             #
@@ -1327,20 +1401,26 @@ class wavelet_eqn(eqn_problem):
             #=============================================================
 
             der_set["Taylor"] = []
+            der_matrices["Taylor"] = []
+
+            print(f"\tCalculating Taylor series derivative...")
 
             for i in range( cls.N_levels+1 ):
                 if verbosity > 0:
                     print(f"\tLevel {i} with {cls.N_coeffs[i]} coefficients.")
 
                 # Pull the gradient matrix
-                gradient_matrix = cls.gradient_matrices[der_order-1][i]
+                dx = 2*cls.DWT_domain_steps[::-1][max(i-1,0)]
+                gradient_matrix = cls.gradient_matrices[der_order-1][i] / ( (dx)**der_order )
 
                 # Calculate the derivative coefficients
                 der_coeffs = gradient_matrix @ cls.coefficients["a"] if i==0 else gradient_matrix @ cls.coefficients[f"d_l{i-1}"]
 
-                der_set["Taylor"] += [ der_coeffs ]
+                # Reframe 
 
+                der_set["Taylor"] += [der_coeffs]
 
+                der_matrices["Taylor"] += [gradient_matrix]
 
             #=============================================================  
             #
@@ -1348,17 +1428,175 @@ class wavelet_eqn(eqn_problem):
             #
             #=============================================================
 
+            der_set["Galerkin"] = []
+            der_matrices["Galerkin"] = []
 
+            print(f"\tCalculating Galerkin derivative...")
+
+            for i in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {i} with {cls.N_coeffs[i]} coefficients.")
+
+                # Pull the Galerkin matrix
+                dx = cls.DWT_domain_steps[::-1][max(i-2,0)]
+                Galerkin_matrix = cls.GalerkinKernel_matrices[der_order-1][i] / ( (dx)**der_order )
+
+                # Calculate the derivative coefficients
+                der_coeffs = Galerkin_matrix.T @ cls.coefficients["a"] if i==0 else Galerkin_matrix @ cls.coefficients[f"d_l{i-1}"]
+
+                der_set["Galerkin"] += [der_coeffs]
+
+                der_matrices["Galerkin"] += [Galerkin_matrix.T]
 
             #=============================================================
             #
-            #   Calculate the derivative for transfered data
+            #   Calculate the derivative for combined derivative data
             #
             #=============================================================
 
+            der_set["Combined"] = []
+            der_matrices["Combined"] = []
+
+            print(f"\tCalculating Combined derivative...")
+
+            for i in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {i} with {cls.N_coeffs[i]} coefficients.")
+
+                # Form the combined derivative list
+                level_der = []
+
+                # 
+                for j in range( der_order-1 ):
+                    print(f"\t\tCombining derivative part {j+1} of {der_order-1}...")
+                    print(f"\t\t\tGradient order:\t{j+1}")
+                    print(f"\t\t\tGalerkin order:\t{der_order-j-1}")
+
+                    # Pull the gradient matrix
+                    dx = 2*cls.DWT_domain_steps[::-1][max(i-2,0)]
+                    gradient_matrix = cls.gradient_matrices[j][i] / ( (dx)**(j+1) )
+
+                    # Pull the Galerkin matrix
+                    dx = cls.DWT_domain_steps[::-1][max(i-1,0)]
+                    Galerkin_matrix = cls.GalerkinKernel_matrices[der_order-j-2][i] / ( (dx)**(der_order-j-1) )
+
+                    # Calculate the derivative coefficients
+                    der_coeffs_part = Galerkin_matrix.T @ ( gradient_matrix @ cls.coefficients["a"] if i==0 else gradient_matrix @ cls.coefficients[f"d_l{i-1}"] )
+
+                    level_der += [ der_coeffs_part ]
+
+                # Add the final part
+                der_set["Combined"] += [ level_der ]
+
+                der_matrices["Combined"] += [ Galerkin_matrix.T @ gradient_matrix ]
+
+            #=============================================================
+            #
+            #   Calculate the transfer terms of the derivative
+            #
+            #=============================================================
+
+            der_set["Transfer"] = []            
+            der_matrices["Transfer"] = []
+
+            print(f"\tCalculating Transfer derivative...")
+
+            for i in range( cls.N_levels+1 ):
+                if verbosity > 0:
+                    print(f"\tLevel {i} with {cls.N_coeffs[i]} coefficients.")
+
+                # Initialize the transfer set data
+                transfer_set = {}
+                transfer_set["Finer"] = np.zeros_like( cls.coefficients["a"] ) if i==0 else np.zeros_like( cls.coefficients[f"d_l{i-1}"] )
+                transfer_set["Coarser"] = np.zeros_like( cls.coefficients["a"] ) if i==0 else np.zeros_like( cls.coefficients[f"d_l{i-1}"] )
+
+                # Initialize the transfer kernel matrix
+                transferKernel_matrices = {} if store_matrices else None
+
+                #
+                #   Finer neighbor data transfer
+                #
+                if i<cls.N_levels:
+                    print(f"\t\tCalculating finer neighbor transfer...")
+
+                    if i==0:
+                        # This if for the coarsest detail transfer to the approximation space
+
+                        # Pull the transfer kernel matrix
+                        dx = cls.DWT_domain_steps[::-1][i]
+                        transferKernel_matrix = cls.transferKernel_matrices[der_order-1][i][f"phi*psi_d{der_order}"] / ( (dx)**der_order )
+
+                        # Calculate the derivative coefficients
+                        transfer_set["Finer"] = transferKernel_matrix.T @ cls.coefficients[f"d_l{i}"]
+
+                    else:
+                        # This is for transfer between a finer detail to coarser detail space
+
+                        # Pull the transfer kernel matrix
+                        dx = cls.DWT_domain_steps[::-1][i+1]
+                        transferKernel_matrix = cls.transferKernel_matrices[der_order-1][i][f"phi*psi_d{der_order}"] / ( (dx)**der_order )
+
+                        # Calculate the approximation transfer data
+                        approx_transfer = transferKernel_matrix.T @ cls.coefficients[f"d_l{i}"]
+
+                        # Decompose to find the detail transfer data
+                        ( _, transfer_set["Finer"] ) = pywt.dwt( approx_transfer, cls.wavelet, mode=cls.signal_extension )
+
+                if store_matrices:
+                    transferKernel_matrices["Finer"] = transferKernel_matrix.T
+
+                #
+                #   Coarser neighbor data transfer
+                #
+                if i>0:
+                    print(f"\t\tCalculating coarser neighbor transfer...")
+
+                    if i==1:
+                        # This is for transfer from the 2nd finest detail to the finest detail space
+
+                        # Pull the transfer kernel matrix
+                        dx = cls.DWT_domain_steps[::-1][0]
+                        transferKernel_matrix = cls.transferKernel_matrices[der_order-1][0][f"psi*phi_d{der_order}"] / ( (dx)**der_order )
+
+                        # 
+                        transfer_set["Coarser"] = transferKernel_matrix @ cls.coefficients["a"]
+
+                    else:
+                        # This is for transfer from the 2nd finest detail to the finest detail space
+
+                        # Pull the transfer kernel matrix
+                        dx = cls.DWT_domain_steps[::-1][i-1]
+                        transferKernel_matrix = cls.transferKernel_matrices[der_order-1][i-1][f"psi*phi_d{der_order}"] / ( (dx)**der_order )
+
+                        # Find the approximation space construction
+                        detail_transfer = pywt.idwt( np.zeros_like(cls.coefficients[f"d_l{i-2}"] ), cls.coefficients[f"d_l{i-2}"], wavelet=cls.wavelet, mode=cls.signal_extension )
+
+                        # Calculate the detail transfer data
+                        #transfer_set["Coarser"] = transferKernel_matrix @ detail_transfer
+                        
+                        # TODO: Finish this
+
+
+
+                #
+                #   Storage
+                #
+                der_set["Transfer"] += [transfer_set]
+                der_matrices["Transfer"] += [transferKernel_matrices] if store_matrices else [None]
+
+
+
+
+                
+            #=============================================================
+            #
+            #   Store the data
+            #
+            #=============================================================
             
 
-    
+            cls.derivatives_set += [ der_set ]
+            cls.derivative_matrices += [ der_matrices ]
         
 
 
@@ -1468,57 +1706,78 @@ class wavelet_eqn(eqn_problem):
 
             cls.dirichlet_BC_operators += [ BC_operator ]
 
-    def derivative_reconstruction(cls, N_advectionLevels=0 ):
+    def derivative_reconstruction(cls, treatment=None ):
         """
-            This method reconstructs the spatial derivatives back to the original domain using 
-        the combination of Galerkin projection and advective flow.
+            This method reconstructs the spatial derivatives in their respective spaces.
 
         Args:
-            N_advectionLevels (int, optional):  The number of levels that will use advection method
-                                                starting with the finest levels.
+            treatment (str, optional):    The method to use for the reconstruction. Defaults to 
+                                            None, which involves construction via the Galerkin 
+                                            terms and returns them back to their own spaces. The
+                                            valid options are:
+
+                                        - "adaptive": This method uses the adaptive scheme that 
+                                                        considers all terms.
 
         """
         import pywt
 
         # Set up reconstructed derivatives storage
-        cls.reconstructed_derivatives = []
+        cls.derivatives_inSpaces = {}
 
-        # Correct for over advection levels
-        if N_advectionLevels>=cls.N_levels:
-            print("Warning: More advection levels selected than levels, minimizing for at least one approximate level.")
-            N_advectionLevels = min( N_advectionLevels, cls.N_levels-1 )
+        #
+        #   Loop through the spaces
+        #
+        for i in range( cls.N_levels+1 ):
+            derivative_inSpace = []
 
-        # Calculate the reconstructed derivatives
-        for i in range( cls.max_derivative ):
+            if treatment is None:
 
-            # Iterate over levels
-            for j in range( cls.N_levels - N_advectionLevels ):
-            
-                # Get approximation space
-                if j==0:
-                    approx = cls.coefficients["a"]
-                else:
-                    approx = der
+                
+                
+                for j in range( cls.max_derivative ):
+                    print(f"\t\tAssembling derivative {j+1}...")
 
-                if cls.N_levels>1:
-                    der = cls.Galerkin_matrices[i][j].T @ np.append( approx, cls.coefficients[f"d_l{j}"] )
-                else:
-                    der = cls.Galerkin_matrices[i][j].T @ np.append( approx, cls.coefficients["d"] )
-                    print(f"Calculated derivative {i}")
+                    scale_correction = 1.0
+                    if i>0:
+                        scale_correction = 2.0**( i+1 )
+                    
+                    derivative_inSpace += [ cls.derivatives_set[j]["Galerkin"][i]/scale_correction ]
 
-            for j in range( N_advectionLevels ):
-                print(f"j={j}")
+                    if i==0:
+                        derivative_inSpace[-1] += cls.derivatives_set[j]["Taylor"][0]
 
-                # Get approximation space 
-                approx = der
+                        for k in range( len(cls.derivatives_set[j]["Combined"][0]) ):
+                            derivative_inSpace[-1] += 2*cls.derivatives_set[j]["Combined"][0][k]
 
-                # Calculate the inverse DWT for the derivative
-                print(f"Approximation shape:\t{approx.shape}")
-                details = cls.coefficients[f"d_l{j+cls.N_levels-N_advectionLevels}"]
-                print(f"Detail Shape:\t{details.shape}")
-                der = pywt.idwt( approx, cls.coefficients[f"d_l{j+cls.N_levels-N_advectionLevels}"], wavelet=cls.wavelet, mode=cls.signal_extension  )
+            elif treatment.lower() in ["adaptive"]:
 
-            cls.reconstructed_derivatives += [ der ]
+                scale_correction = 1.0
+                if i>0:
+                    scale_correction = 2.0**( i )
+                
+                for j in range( cls.max_derivative ):
+                    print(f"\t\tAssembling derivative {j+1}...")
+                    
+                    derivative_inSpace += [ cls.derivatives_set[j]["Galerkin"][i]/scale_correction ]
+
+                    derivative_inSpace[-1] += cls.derivatives_set[j]["Taylor"][0]
+
+                    for k in range( len(cls.derivatives_set[j]["Combined"][0]) ):
+                        derivative_inSpace[-1] += 2*cls.derivatives_set[j]["Combined"][0][k]
+
+
+            cls.derivatives_inSpaces[list(cls.coefficients.keys())[i]] = derivative_inSpace
+
+
+
+
+
+
+
+
+
+        
 
     def flux_reconstruction(cls, domain_reconciliation="interpolation" ):
         """
