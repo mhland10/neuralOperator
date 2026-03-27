@@ -1526,6 +1526,7 @@ class wavelet_eqn(eqn_problem):
                         # Pull the transfer kernel matrix
                         dx = cls.DWT_domain_steps[::-1][i]
                         transferKernel_matrix = cls.transferKernel_matrices[der_order-1][i][f"phi*psi_d{der_order}"] / ( (dx)**der_order )
+                        
 
                         # Calculate the derivative coefficients
                         transfer_set["Finer"] = transferKernel_matrix.T @ cls.coefficients[f"d_l{i}"]
@@ -1558,14 +1559,16 @@ class wavelet_eqn(eqn_problem):
                         # Pull the transfer kernel matrix
                         dx = cls.DWT_domain_steps[::-1][0]
                         transferKernel_matrix = cls.transferKernel_matrices[der_order-1][0][f"psi*phi_d{der_order}"] / ( (dx)**der_order )
+                        #transferKernel_matrix = cls.GalerkinKernel_matrices[der_order-1][i] / ( (dx)**der_order )
 
                         # 
                         approx_space = cls.coefficients["a"]
                         virt_a, virt_d = pywt.dwt( approx_space, cls.wavelet, mode=cls.signal_extension )
-                        wavelet_return = pywt.idwt( np.zeros_like(virt_a), virt_d, cls.wavelet, mode=cls.signal_extension )
+                        wavelet_return = pywt.idwt( np.zeros_like(virt_d), virt_d, cls.wavelet, mode=cls.signal_extension )
                         if not len(wavelet_return)==len(cls.coefficients["a"]):
                             wavelet_return = wavelet_return[:-1]
-                        transfer_set["Coarser"] = transferKernel_matrix @ cls.coefficients["a"]
+                        transfer_set["Coarser"] = transferKernel_matrix @ wavelet_return
+                        #transfer_set["Coarser"] = wavelet_return
 
                     else:
                         # This is for transfer from the 2nd finest detail to the finest detail space
@@ -1575,9 +1578,9 @@ class wavelet_eqn(eqn_problem):
                         transferKernel_matrix = cls.transferKernel_matrices[der_order-1][i-1][f"psi*phi_d{der_order}"] / ( (dx)**der_order )
 
                         # Find the approximation space construction
-                        detail_transfer = pywt.idwt( np.zeros_like(cls.coefficients[f"d_l{i-2}"] ), cls.coefficients[f"d_l{i-2}"], wavelet=cls.wavelet, mode=cls.signal_extension )
+                        detail_transfer = pywt.idwt( np.zeros_like(cls.coefficients[f"d_l{i-2}"]), cls.coefficients[f"d_l{i-2}"], wavelet=cls.wavelet, mode=cls.signal_extension )
                         if not len(detail_transfer)==len(cls.coefficients[f"d_l{i-1}"]):
-                            detail_transfer=detail_transfer[:-1]
+                            detail_transfer=detail_transfer[1:]
 
                         # Calculate the detail transfer data
                         transfer_set["Coarser"] = transferKernel_matrix @ detail_transfer
