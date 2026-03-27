@@ -1121,10 +1121,10 @@ class wavelet_eqn(eqn_problem):
 
                     if j==0:
                         insertion = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
-                        GalerkinKernel_matrix[m,:len(insertion)] = insertion
+                        GalerkinKernel_matrix[m,:len(insertion)] = insertion/2
                     else:
                         insertion = cls.raw_convolutions[f"psi_decomp*psi_rebuild_d{i+1}"][::2].real
-                        GalerkinKernel_matrix[m,:len(insertion)] = insertion
+                        GalerkinKernel_matrix[m,:len(insertion)] = insertion/2
 
                     GalerkinKernel_matrix[m] = np.roll( GalerkinKernel_matrix[m].toarray(), cls.indices[0]+m )
 
@@ -1158,17 +1158,18 @@ class wavelet_eqn(eqn_problem):
                     cls.phaseShift_indices = 0
                     if transfer_phaseShift:
                         peak_split = np.argmax( np.abs( cls.raw_wavelet_shapes["psi_decomp"] ) ) - np.argmax( np.abs( cls.raw_wavelet_shapes["phi_decomp"] ) )
-                        cls.phaseShift_indices = (peak_split + cls.support)-1
+                        #cls.phaseShift_indices = (peak_split + cls.support)-1
+                        cls.phaseShift_indices = 0
                     
                     # Transfer in from the coarser space to the finer space
                     insertion = cls.raw_convolutions[f"phi_decomp*phi_rebuild_d{i+1}"][::2].real
-                    transferKernel_matrices[f"phi*psi_d{i+1}"][m,:len(insertion)] = insertion
+                    transferKernel_matrices[f"phi*psi_d{i+1}"][m,:len(insertion)] = insertion/2
                     transferKernel_matrices[f"phi*psi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
                     transferKernel_matrices[f"phi*psi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"phi*psi_d{i+1}"][m].toarray(), cls.indices[0]+m+cls.phaseShift_indices )
                     
                     # Trasfer in from the finer space to the coarser space
                     insertion = cls.raw_convolutions[f"psi_decomp*phi_rebuild_d{i+1}"][::2].real
-                    transferKernel_matrices[f"psi*phi_d{i+1}"][m,:len(insertion)] = insertion
+                    transferKernel_matrices[f"psi*phi_d{i+1}"][m,:len(insertion)] = insertion/2
                     transferKernel_matrices[f"psi*phi_d{i+1}"][m][np.abs(transferKernel_matrices[f"phi*psi_d{i+1}"][m])<=small] = 0
                     transferKernel_matrices[f"psi*phi_d{i+1}"][m] = np.roll( transferKernel_matrices[f"psi*phi_d{i+1}"][m].toarray(), cls.indices[0]+m-cls.phaseShift_indices )
 
@@ -1739,8 +1740,8 @@ class wavelet_eqn(eqn_problem):
                     print(f"\t\tAssembling derivative {j+1}...")
 
                     scale_correction = 1.0
-                    if i>0:
-                        scale_correction = 2.0**( i+1 )
+                    #if i>0:
+                    #    scale_correction = 2.0**( i+1 )
                     
                     derivative_inSpace += [ cls.derivatives_set[j]["Galerkin"][i]/scale_correction ]
 
