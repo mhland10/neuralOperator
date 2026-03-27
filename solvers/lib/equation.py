@@ -1560,6 +1560,11 @@ class wavelet_eqn(eqn_problem):
                         transferKernel_matrix = cls.transferKernel_matrices[der_order-1][0][f"psi*phi_d{der_order}"] / ( (dx)**der_order )
 
                         # 
+                        approx_space = cls.coefficients["a"]
+                        virt_a, virt_d = pywt.dwt( approx_space, cls.wavelet, mode=cls.signal_extension )
+                        wavelet_return = pywt.idwt( np.zeros_like(virt_a), virt_d, cls.wavelet, mode=cls.signal_extension )
+                        if not len(wavelet_return)==len(cls.coefficients["a"]):
+                            wavelet_return = wavelet_return[:-1]
                         transfer_set["Coarser"] = transferKernel_matrix @ cls.coefficients["a"]
 
                     else:
@@ -1571,11 +1576,14 @@ class wavelet_eqn(eqn_problem):
 
                         # Find the approximation space construction
                         detail_transfer = pywt.idwt( np.zeros_like(cls.coefficients[f"d_l{i-2}"] ), cls.coefficients[f"d_l{i-2}"], wavelet=cls.wavelet, mode=cls.signal_extension )
+                        if not len(detail_transfer)==len(cls.coefficients[f"d_l{i-1}"]):
+                            detail_transfer=detail_transfer[:-1]
 
                         # Calculate the detail transfer data
-                        #transfer_set["Coarser"] = transferKernel_matrix @ detail_transfer
+                        transfer_set["Coarser"] = transferKernel_matrix @ detail_transfer
                         
                         # TODO: Finish this
+                    #print(f"\n\n**Coarser transfer data is length:\t{len(transfer_set['Coarser'])}")
 
 
 
