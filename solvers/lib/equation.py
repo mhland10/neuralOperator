@@ -2004,3 +2004,235 @@ class burgers_DWTeqn(wavelet_eqn):
                 du_dt[k] += cls.L[k]
 
         return du_dt
+    
+#==================================================================================================
+#
+#   Spectral Equation
+#
+#==================================================================================================
+
+class spectralDG_eqn(eqn_problem):
+    """
+        This object holds the data and methods for performing operations on a PDE with the spectral
+    Discontinuous Galerkin scheme.
+
+    """
+    def __init__(self, spatial_order=2, spatialBC_order=None, stepping="explicit", max_derivative=2, N_levels=1, wavelet="db2", signal_extension="zero" ):
+        """
+            Initialize the DWT equation problem.
+
+        Args:
+            spatial_order (int, optional):  The theoretical order that the spatial gradient will be
+                                                calculated by, i.e. the number of points in the 
+                                                stencil. Defaults to 2.
+
+            spatialBC_order (int, optional):    The theoretical order that the spatial gradient
+                                                    will be calculated by at the boundary 
+                                                    conditions. Defaults to None, which sets the 
+                                                    value to "spatial_order".
+
+            stepping (str, optional):   The stepping method that will be used to solve the PDE.
+                                            Defaults to "explicit", or can be implicit. Not case
+                                            sensitive.
+
+            max_derivative (int, optional): The maximum derivative that will be calculated in space
+                                                for the equation. Will come from the equation 
+                                                object. Default value is 2.
+
+            N_levels (int): The number of levels in the Discrete Cosine Transform.
+
+            signal_extension (str):    The type of signal extension to be used in the DWT. Defaults
+                                        to "zero". Other options include "symmetric", "periodic", 
+                                        etc. Check the PyWavelets documentation for more details.
+
+        Attributes:
+            spatial_order <= spatial_order
+
+            spatialBC_order <= spatialBC_order
+
+            spatialGradients (numericalGradients object):   The list of numericalGradients objects
+                                                                that correspond to the i+1 spatial
+                                                                derivative.
+
+            stepping <= stepping
+        
+        """
+        # Import PyWavelets, we do this here so other 1D equations don't need to import it
+        import pywt
+
+        # Set up boundary condition order
+        if spatialBC_order is None:
+            spatialBC_order = spatial_order
+
+        # Initialize from eqn_problem
+        super().__init__(spatial_order, spatialBC_order, stepping=stepping, max_derivative=max_derivative)
+
+        # Store wavelet data
+        self.N_levels = N_levels
+        self.signal_extension = signal_extension
+
+        # Store gradient construction method
+        self.max_derivative = max_derivative 
+
+    def spectral_initialization(cls, u, x ):
+        """
+            This method calculates the spectral/Discrete Cosine Transform (DCT) coefficients and
+        the mean behavior to intialize the spectral DG method.
+
+        Args:
+            u (float, array):   The function data.
+
+            x (float, array):   The function domain.
+
+        Attributes:
+            u_avg (float, array):   The average value over the sampling window for the spectral DG
+                                    scheme.
+
+            coefficients (float, array ):   The DCT coefficients for the spectral DG scheme.
+
+        """
+
+        # Import modules
+        import scipy.fftpack as scif
+        from numpy.polynomial.legendre import Legendre
+
+        # Initialize the padded data
+        cls.padded_data(u)
+
+        #=============================================================
+        #
+        #   Calculate the quadrature points
+        #
+        #=============================================================   
+
+        # Calculate the number of quadrature points for sampling
+        N_quadWindow = cls.N_levels + 1
+
+        # Calculate the quadrature points for each location
+        P = Legendre.basis(cls.N_levels)
+        xi_interior = P.deriv().roots()          # interior points
+        cls.xi = np.concatenate(([-1], xi_interior, [1]))  # add endpoints
+
+        # Element x's
+        cls.x_elements = np.zeros( ( len(x)-1, N_quadWindow ) )
+        for i in range( len(x) - 1 ):
+            cls.x_elements[i] = cls.xi * ( x[i+1] - x[i] ) / 2 + ( x[i+1] + x[i] ) / 2
+
+        # Interpolate the data onto the new domain
+        cls.u_elements = np.zeros_like( cls.x_elements )
+        for i in range( len(x) - 1 ):
+            cls.u_elements[i] = np.interp( cls.x_elements[i], x, u )
+
+        #=============================================================
+        #
+        #   Calculate the weighted data
+        #
+        #=============================================================   
+
+        # Calculate the weights for the averaging window
+        cls.weights = 2 / ( N_quadWindow * ( N_quadWindow - 1 ) * ( P(cls.xi) )**2 )
+
+
+        #=============================================================
+        #
+        #   Calculate the coefficients
+        #
+        #=============================================================       
+
+        cls.P_all = np.vstack([Legendre.basis(n)(cls.xi) for n in range(cls.N_levels+1)]).T  # shape (N+1, N+1)
+
+        cls.coefficients = np.zeros( ( len(x)-1, cls.N_levels+1 ) )
+        for i in range( len(x) - 1 ):
+            cls.coefficients[i] = np.dot(cls.u_elements[i]*cls.weights, cls.P_all)
+
+    def matrix_precompute(cls):
+        """
+            This method precomputes the matrices for the spectral DG method, including the gradient
+        matrices and the Galerkin kernel matrices.
+
+        """
+
+        #=============================================================
+        #
+        #   Calculate the derivative matrices
+        #
+        #============================================================= 
+
+        # Calculate the gradient matrix
+        gradient_matrix = np.zeros( (cls.N_levels+1, cls.N_levels+1) )
+        for i in range(cls.N_levels+1):
+            for j in range(cls.N_levels+1):
+                if (not np.mod((j-i),2)==0) and i<j:
+                    gradient_matrix[i,j] = 2*j-1
+
+        cls.der_matrices = []
+        for der_order in range( 1, cls.max_derivative+1 ):
+            print(f"\tCalculating derivative matrices for derivative order {der_order}...")
+
+            cls.der_matrices += [ gradient_matrix**der_order ]
+
+    def derivatives(cls ):
+        """
+            This method calculates the derivatives for the spectral DG method in the respective
+        spaces.
+
+        """
+        
+
+    def padded_data(cls, u):
+        """_summary_
+
+        Args:
+            u (float, array):   The data to be padded.
+
+        Attributes:
+            u_padded (float, array):    The padded data according to the extension 
+                                        "signal_extension".
+
+        """
+
+        # Initialize the padded data
+        cls.u_padded = np.zeros( len(u) + 2 * cls.N_levels )
+
+        # Insert known data
+        cls.u_padded[cls.N_levels:-cls.N_levels] = u
+
+        # Insert the padding according to the known schemes
+        if cls.signal_extension.lower() in ["constant"]:
+            cls.u_padded[:cls.N_levels+1] = u[0]
+            cls.u_padded[-(cls.N_levels+1):] = u[-1]
+        
+        elif cls.signal_extension.lower() in ["symmetric"]:
+            for i in range( cls.N_levels ):
+                cls.u_padded[cls.N_levels-i-1] = u[i]
+                cls.u_padded[i-cls.N_levels] = u[-i-1]
+
+        elif cls.signal_extension.lower() in ["reflect"]:
+            for i in range( cls.N_levels ):
+                cls.u_padded[cls.N_levels-i-1] = u[i+1]
+                cls.u_padded[i-cls.N_levels] = u[-i-2]
+
+        elif cls.signal_extension.lower() in ["periodic"]:
+            for i in range( cls.N_levels ):
+                cls.u_padded[i] = u[i-cls.N_levels]
+                cls.u_padded[-i-1] = u[cls.N_levels-i-1]
+
+        elif cls.signal_extension.lower() in ["smooth"]:
+            du = np.gradient(u)
+            du_LHS = du[0]
+            du_RHS = du[-1]
+            for i in range( cls.N_levels ):
+                cls.u_padded[cls.N_levels-i-1] = u[0] - (i+1)*du_LHS
+                cls.u_padded[i-cls.N_levels] = u[-1] + (i+1)*du_RHS
+
+        elif cls.signal_extension.lower() in ["antisymmetric"]:
+            for i in range( cls.N_levels ):
+                cls.u_padded[cls.N_levels-i] = -u[i]
+                cls.u_padded[i-cls.N_levels-1] = -u[-1-i]
+
+        elif cls.signal_extension.lower() in ["antireflect"]:
+            print("This method needs to be worked on")
+
+        else:
+            print("Zero padding used")
+
