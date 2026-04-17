@@ -2177,6 +2177,12 @@ class spectralDG_eqn(eqn_problem):
         spaces.
 
         """
+
+        cls.derivatives = []
+        for der_order in range( 1, cls.max_derivative+1 ):
+            print(f"\tCalculating derivative order {der_order}...")
+
+            cls.derivatives += [ cls.der_matrices[der_order-1] @ cls.coefficients.T ]
         
 
     def padded_data(cls, u):
