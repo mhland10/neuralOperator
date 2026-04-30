@@ -969,11 +969,19 @@ class wavelet_eqn(eqn_problem):
             # Calculate spectral differential representation
             cls.wavelet_full_spectra_der = {}
             cls.wavelet_spectra_der = {}
+            cls.wavelet_full_dervitive_correction = {}
+            cls.wavelet_dervitive_correction = {}
             for i in range( cls.max_derivative ):
                 for k in cls.og_keys:
 
-                    cls.wavelet_full_spectra_der[f"{k}_d{i}"] = cls.wavelet_full_spectra[k] * ( 1j * cls.full_wavenumbers ) ** ( i+1 )
-                    cls.wavelet_spectra_der[f"{k}_d{i}"] = cls.wavelet_spectra[k] * ( 1j * cls.wavenumbers ) ** ( i+1 )
+                    cls.wavelet_full_spectra_der[f"{k}_d{i}"] = cls.wavelet_full_spectra[k] * ( ( 1j * cls.full_wavenumbers ) ** ( i+1 ) )
+                    cls.wavelet_spectra_der[f"{k}_d{i}"] = cls.wavelet_spectra[k] * ( ( 1j * cls.wavenumbers ) ** ( i+1 ) )
+
+                    if enforce_real:
+                        cls.wavelet_full_dervitive_correction[f"{k}_d{i}"] = np.linalg.norm( cls.wavelet_full_spectra[k] ) / np.linalg.norm( cls.wavelet_full_spectra_der[f"{k}_d{i}"] )
+                        cls.wavelet_full_spectra_der[f"{k}_d{i}"] = cls.wavelet_full_spectra_der[f"{k}_d{i}"] * cls.wavelet_full_dervitive_correction[f"{k}_d{i}"]
+                        cls.wavelet_dervitive_correction[f"{k}_d{i}"] = np.linalg.norm( cls.wavelet_spectra[k] ) / np.linalg.norm( cls.wavelet_spectra_der[f"{k}_d{i}"] )
+                        cls.wavelet_spectra_der[f"{k}_d{i}"] = cls.wavelet_spectra_der[f"{k}_d{i}"] * cls.wavelet_dervitive_correction[f"{k}_d{i}"]
 
             # Return back to Euclidean space
             cls.wavelet_derivatives = {}
@@ -981,7 +989,7 @@ class wavelet_eqn(eqn_problem):
                 for k in cls.og_keys:
 
                     #cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] ) / ( cls.Ls_full[k] ** (i+1) )
-                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] ) #* ( (-1)**(i+1) )
+                    cls.wavelet_derivatives[f"{k}_d{i+1}"] = ( 1 ** (i+1) ) * np.fft.ifft( cls.wavelet_full_spectra_der[f"{k}_d{i}"] ) #* ( (-1)**(i+1) )
 
         #
         #   Catch invalid differencing methods
